@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.account.service.member.dao.MemberMapper">
+
+    <!-- 공통 필터: 일반회원(MEMBER) + 미삭제 + status/keyword 동적. keyword 는 서비스에서 LIKE 이스케이프 + 2자 이상 보장 -->
+    <sql id="memberFilter">
+        WHERE USER_TYPE_CD = 'MEMBER'
+          AND DEL_YN = 'N'
+        <if test="status != null and status != ''">
+          AND ACNT_STTS = #{status}
+        </if>
+        <if test="keyword != null and keyword != ''">
+          AND ( USER_NM   LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\'
+             OR EML_ADDR  LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\'
+             OR NCNM      LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\' )
+        </if>
+    </sql>
+
+    <!-- 목록(오프셋 페이징) — 결정적 정렬(REG_DT DESC, USER_SN DESC)로 중복/누락 방지 -->
+    <select id="selectMemberListOffset" resultType="egovframework.eeum.account.vo.AccountVO">
+        SELECT USER_SN, EML_ADDR, USER_TYPE_CD, ACNT_STTS, USER_NM, NCNM, MBL_TELNO, MBL_TELNO_VRFC_YN, REG_DT
+          FROM USER_ACNT
+        <include refid="memberFilter"/>
+         ORDER BY REG_DT DESC, USER_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countMemberList" resultType="long">
+        SELECT COUNT(*)
+          FROM USER_ACNT
+        <include refid="memberFilter"/>
+    </select>
+
+    <!-- 상세 — MEMBER + 미삭제일 때만(비MEMBER/삭제는 null → 404 열거 방지) -->
+    <select id="selectMemberDetail" resultType="egovframework.eeum.account.vo.AccountVO">
+        SELECT USER_SN, EML_ADDR, USER_TYPE_CD, LGN_TYPE, ACNT_STTS, USER_NM, NCNM,
+               MBL_TELNO, MBL_TELNO_VRFC_YN, REG_DT
+          FROM USER_ACNT
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'MEMBER'
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 상태변경 선잠금 -->
+    <select id="selectMemberForUpdate" resultType="egovframework.eeum.account.vo.AccountVO">
+        SELECT USER_SN, USER_TYPE_CD, ACNT_STTS, DEL_YN
+          FROM USER_ACNT
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'MEMBER'
+           AND DEL_YN = 'N'
+         FOR UPDATE
+    </select>
+
+    <!-- 상태변경 — 계정유형 2중가드(MEMBER 외 계정 변경 차단) -->
+    <update id="updateMemberStatus">
+        UPDATE USER_ACNT
+           SET ACNT_STTS = #{acntStts},
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{mdfrSn}
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'MEMBER'
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

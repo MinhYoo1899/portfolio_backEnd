@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.settlement.service.settlement.dao.SettlementMapper">
+
+    <!-- 정산 설정(단일행 SN=1) 조회 -->
+    <select id="selectSetting" resultType="egovframework.eeum.settlement.vo.SettlementSettingVO">
+        SELECT SETTLEMENT_SETTING_SN, PLATFORM_FEE_RATE, CARD_FEE_RATE, VAT_RATE, SETTLEMENT_BASIS_CD,
+               DEPOSIT_DUE_DAYS, SETTLEMENT_CYCLE_CD, MIN_SETTLEMENT_AMT, AUTO_INVOICE_YN, TAX_INVOICE_YN, MDFCN_DT
+          FROM SETTLEMENT_SETTING
+         WHERE SETTLEMENT_SETTING_SN = 1
+    </select>
+
+    <!-- 정산 설정 전체 저장(단일행 SN=1) -->
+    <update id="updateSetting">
+        UPDATE SETTLEMENT_SETTING
+           SET PLATFORM_FEE_RATE   = #{platformFeeRate},
+               CARD_FEE_RATE       = #{cardFeeRate},
+               VAT_RATE            = #{vatRate},
+               SETTLEMENT_BASIS_CD = #{settlementBasisCd},
+               DEPOSIT_DUE_DAYS    = #{depositDueDays},
+               SETTLEMENT_CYCLE_CD = #{settlementCycleCd},
+               MIN_SETTLEMENT_AMT  = #{minSettlementAmt},
+               AUTO_INVOICE_YN     = #{autoInvoiceYn},
+               TAX_INVOICE_YN      = #{taxInvoiceYn},
+               MDFCN_DT            = UTC_TIMESTAMP(6),
+               MDFR_SN             = #{mdfrSn}
+         WHERE SETTLEMENT_SETTING_SN = 1
+    </update>
+
+    <!-- 회차 파트너별 판매집계(APPROVED 결제, 체크아웃월 기준) + 실행기록 조인 -->
+    <select id="selectPartnerSettlementRows" resultType="egovframework.eeum.settlement.vo.PartnerSettlementRowVO">
+        SELECT R.PRTNR_SN AS PRTNR_SN,
+               MAX(P.CONM) AS PRTNR_CONM,
+               COALESCE(SUM(PM.PAY_AMT), 0) AS TOTAL_SALES_AMT,
+               MAX(PS.PARTNER_SETTLEMENT_SN) AS EXECUTED_SN,
+               MAX(PS.EXECUTED_AT) AS EXECUTED_AT
+          FROM RESERVATION R
+          JOIN PRTNR_MST P ON P.PRTNR_SN = R.PRTNR_SN
+          JOIN PAYMENT PM ON PM.RESERVATION_SN = R.RESERVATION_SN
+                         AND PM.PAYMENT_STTS_CD = 'APPROVED' AND PM.DEL_YN = 'N'
+          LEFT JOIN PARTNER_SETTLEMENT PS ON PS.ROUND_YM = #{roundYm} AND PS.PRTNR_SN = R.PRTNR_SN
+         WHERE R.DEL_YN = 'N'
+           AND DATE_FORMAT(R.CHECK_OUT_DATE, '%Y-%m') = #{roundYm}
+         GROUP BY R.PRTNR_SN
+         ORDER BY R.PRTNR_SN
+    </select>
+
+    <!-- 특정 회차·파트너 판매 합(실행 스냅샷용) -->
+    <select id="selectPartnerSalesForRound" resultType="long">
+        SELECT COALESCE(SUM(PM.PAY_AMT), 0)
+          FROM RESERVATION R
+          JOIN PAYMENT PM ON PM.RESERVATION_SN = R.RESERVATION_SN
+                         AND PM.PAYMENT_STTS_CD = 'APPROVED' AND PM.DEL_YN = 'N'
+         WHERE R.DEL_YN = 'N'
+           AND R.PRTNR_SN = #{prtnrSn}
+           AND DATE_FORMAT(R.CHECK_OUT_DATE, '%Y-%m') = #{roundYm}
+    </select>
+
+    <!-- 이미 실행된 회차·파트너 수 -->
+    <select id="countExecuted" resultType="int">
+        SELECT COUNT(1) FROM PARTNER_SETTLEMENT
+         WHERE ROUND_YM = #{roundYm} AND PRTNR_SN = #{prtnrSn}
+    </select>
+
+    <!-- 파트너 정산 실행기록 삽입 -->
+    <insert id="insertPartnerSettlement" parameterType="egovframework.eeum.settlement.vo.PartnerSettlementVO"
+            useGeneratedKeys="true" keyProperty="partnerSettlementSn">
+        INSERT INTO PARTNER_SETTLEMENT
+            (ROUND_YM, PRTNR_SN, TOTAL_SALES_AMT, CARD_FEE_AMT, PLATFORM_FEE_AMT, SETTLEMENT_AMT,
+             SETTLEMENT_STTS_CD, EXECUTED_AT, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{roundYm}, #{prtnrSn}, #{totalSalesAmt}, #{cardFeeAmt}, #{platformFeeAmt}, #{settlementAmt},
+             'COMPLETED', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+</mapper>

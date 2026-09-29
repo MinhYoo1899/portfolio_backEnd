@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.content.service.adbanner.dao.ContentAdBannerMapper">
+
+    <!-- 조회 컬럼(미삭제만 조회) — status 는 저장 안 함(서비스 산출) -->
+    <sql id="adBannerColumns">
+        CONTENT_AD_BANNER_SN, TITLE, SUB_COPY, IMG_URL, POSITION_CD,
+        LINK_TARGET_CD, LINK_TARGET_VAL, EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), PK 생성키 회수 -->
+    <insert id="insertAdBanner" parameterType="egovframework.eeum.content.vo.ContentAdBannerVO"
+            useGeneratedKeys="true" keyProperty="contentAdBannerSn">
+        INSERT INTO CONTENT_AD_BANNER
+            (TITLE, SUB_COPY, IMG_URL, POSITION_CD, LINK_TARGET_CD, LINK_TARGET_VAL,
+             EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{title}, #{subCopy}, #{imgUrl}, #{positionCd}, #{linkTargetCd}, #{linkTargetVal},
+             #{exposeBgnDate}, #{exposeEndDate}, #{exposeYn}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 결정적 정렬(노출위치 AD_BANNER_POSITION SORT_SEQ ASC, SN DESC). 위치코드는 LEFT JOIN(고아 위치도 표출) -->
+    <select id="selectAdBannerList" resultType="egovframework.eeum.content.vo.ContentAdBannerVO">
+        SELECT B.CONTENT_AD_BANNER_SN, B.TITLE, B.SUB_COPY, B.IMG_URL, B.POSITION_CD,
+               B.LINK_TARGET_CD, B.LINK_TARGET_VAL, B.EXPOSE_BGN_DATE, B.EXPOSE_END_DATE, B.EXPOSE_YN, B.REG_DT
+          FROM CONTENT_AD_BANNER B
+          LEFT JOIN COMM_CD C
+            ON C.GROUP_CD = 'AD_BANNER_POSITION' AND C.CD = B.POSITION_CD AND C.DEL_YN = 'N'
+         WHERE B.DEL_YN = 'N'
+         ORDER BY C.SORT_SEQ ASC, B.CONTENT_AD_BANNER_SN DESC
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectAdBannerById" resultType="egovframework.eeum.content.vo.ContentAdBannerVO">
+        SELECT <include refid="adBannerColumns"/>
+          FROM CONTENT_AD_BANNER
+         WHERE CONTENT_AD_BANNER_SN = #{contentAdBannerSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 수정(미삭제) — EXPOSE_YN 미변경(보존), MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updateAdBanner" parameterType="egovframework.eeum.content.vo.ContentAdBannerVO">
+        UPDATE CONTENT_AD_BANNER
+           SET TITLE           = #{title},
+               SUB_COPY        = #{subCopy},
+               IMG_URL         = #{imgUrl},
+               POSITION_CD     = #{positionCd},
+               LINK_TARGET_CD  = #{linkTargetCd},
+               LINK_TARGET_VAL = #{linkTargetVal},
+               EXPOSE_BGN_DATE = #{exposeBgnDate},
+               EXPOSE_END_DATE = #{exposeEndDate},
+               MDFCN_DT        = UTC_TIMESTAMP(6),
+               MDFR_SN         = #{mdfrSn}
+         WHERE CONTENT_AD_BANNER_SN = #{contentAdBannerSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 노출 토글(미삭제) -->
+    <update id="updateAdBannerExposeYn">
+        UPDATE CONTENT_AD_BANNER
+           SET EXPOSE_YN = #{exposeYn},
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{mdfrSn}
+         WHERE CONTENT_AD_BANNER_SN = #{contentAdBannerSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeleteAdBanner">
+        UPDATE CONTENT_AD_BANNER
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE CONTENT_AD_BANNER_SN = #{contentAdBannerSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- linkTarget=PRODUCT 검증 — 존재+미삭제 고택 수(0=없음) -->
+    <select id="selectActiveHouseExists" resultType="int">
+        SELECT COUNT(1)
+          FROM HOUSE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+</mapper>

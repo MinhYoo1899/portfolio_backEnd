@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.house.dao.HouseMapper">
+
+    <insert id="insertHouse" parameterType="egovframework.eeum.house.vo.HouseVO"
+            useGeneratedKeys="true" keyProperty="houseSn">
+        INSERT INTO HOUSE (
+            PRTNR_SN, HOUSE_NM, ZIP, ADDR, DADDR, HOUSE_DC, SIDO_REGION_CD, SIGUNGU_REGION_CD,
+            REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{prtnrSn}, #{houseNm}, #{zip}, #{addr}, #{daddr}, #{houseDc}, #{sidoRegionCd}, #{sigunguRegionCd},
+            UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+        <!-- 최초 insert 시 수정일시=등록일시 (한 statement 내 UTC_TIMESTAMP(6)는 동일값) — 규칙 -->
+
+        <!-- HOUSE_STTS_CD='DRAFT', DEL_YN='N' 은 DB 기본값 -->
+    </insert>
+
+    <select id="selectHouseDetail" resultType="egovframework.eeum.house.vo.HouseVO">
+        SELECT H.HOUSE_SN, H.PRTNR_SN, H.HOUSE_NM, H.HOUSE_STTS_CD, H.ZIP, H.ADDR, H.DADDR, H.HOUSE_DC,
+               H.ADULT_ADD_CHRG_AMT, H.CHILD_ADD_CHRG_AMT, H.INFANT_ADD_CHRG_AMT,
+               H.WEEKDAY_RATE_AMT, H.FRIDAY_RATE_AMT, H.SATURDAY_RATE_AMT, H.PEAK_RATE_AMT,
+               H.CLOSED_WKDAY_CD, H.HOLIDAY_CLOSED_YN, H.LUNAR_HOLIDAY_CLOSED_YN,
+               H.CHKIN_TIME, H.CHKOUT_TIME, H.LATE_CHKOUT_TIME, H.RSVT_CNFIRM_CD,
+               H.CNCL_RFND_PLCY_CN, H.PBTRNSP_GUIDE_CN, H.NOTICE_CN,
+               H.REG_DT, H.MDFCN_DT,
+               P.CONM AS PRTNR_CONM,
+               (SELECT COUNT(*) FROM ROOM R WHERE R.HOUSE_SN = H.HOUSE_SN AND R.DEL_YN = 'N') AS ROOM_CNT,
+               (SELECT HI.ATCH_FILE_SN FROM HOUSE_IMAGE HI
+                 WHERE HI.HOUSE_SN = H.HOUSE_SN AND HI.DEL_YN = 'N' AND HI.RPRS_YN = 'Y' LIMIT 1) AS RPRS_ATCH_FILE_SN
+          FROM HOUSE H
+          JOIN PRTNR_MST P ON P.PRTNR_SN = H.PRTNR_SN
+         WHERE H.HOUSE_SN = #{houseSn}
+           AND H.DEL_YN = 'N'
+    </select>
+
+    <select id="selectHouseForUpdate" resultType="egovframework.eeum.house.vo.HouseVO">
+        SELECT HOUSE_SN, PRTNR_SN, HOUSE_STTS_CD, DEL_YN
+          FROM HOUSE
+         WHERE HOUSE_SN = #{houseSn}
+         FOR UPDATE
+    </select>
+
+    <!-- 발행 후 표류 재검증용 — 현재 게시상태(미삭제 행만) -->
+    <select id="selectHouseSttsCd" resultType="string">
+        SELECT HOUSE_STTS_CD
+          FROM HOUSE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 목록 공통 WHERE — 본인 소유(prtnrSn) 격리 + 상태/검색 필터 -->
+    <sql id="listWhere">
+        WHERE H.PRTNR_SN = #{prtnrSn}
+          AND H.DEL_YN = 'N'
+        <if test="status != null and status != ''"> AND H.HOUSE_STTS_CD = #{status} </if>
+        <if test="keyword != null and keyword != ''">
+            AND H.HOUSE_NM LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\\'
+        </if>
+    </sql>
+
+    <select id="selectHouseListOffset" resultType="egovframework.eeum.house.vo.HouseVO">
+        SELECT H.HOUSE_SN, H.HOUSE_NM, H.HOUSE_STTS_CD, H.ADDR, H.REG_DT,
+               (SELECT COUNT(*) FROM ROOM R WHERE R.HOUSE_SN = H.HOUSE_SN AND R.DEL_YN = 'N') AS ROOM_CNT
+          FROM HOUSE H
+        <include refid="listWhere"/>
+         ORDER BY H.HOUSE_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countHouseList" resultType="long">
+        SELECT COUNT(*)
+          FROM HOUSE H
+        <include refid="listWhere"/>
+    </select>
+
+    <update id="updateHouse">
+        UPDATE HOUSE
+           SET HOUSE_NM = #{houseNm},
+               ZIP = #{zip},
+               ADDR = #{addr},
+               DADDR = #{daddr},
+               HOUSE_DC = #{houseDc},
+               <!-- 지역: 미전송(sidoRegionCd NULL)이면 기존값 보존(백필값 wipe 방지). 시도 전송 시에만 시도/시군구 함께 교체. -->
+               SIDO_REGION_CD    = CASE WHEN #{sidoRegionCd} IS NULL THEN SIDO_REGION_CD ELSE #{sidoRegionCd} END,
+               SIGUNGU_REGION_CD = CASE WHEN #{sidoRegionCd} IS NULL THEN SIGUNGU_REGION_CD ELSE #{sigunguRegionCd} END,
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 상태변경 — 본인 소유 + 미삭제 + SUSPENDED 아님(판매자 자가복구 차단, 2중 방어) -->
+    <update id="updateHouseStatus">
+        UPDATE HOUSE
+           SET HOUSE_STTS_CD = #{houseSttsCd},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+           AND HOUSE_STTS_CD &lt;&gt; 'SUSPENDED'
+    </update>
+
+    <!-- 정책 수정(위저드 Step2 전체저장) — 10개 정책컬럼 무조건 SET(null도 그대로). 본인 소유 + 미삭제일 때만 -->
+    <update id="updateHousePolicy">
+        UPDATE HOUSE
+           SET ADULT_ADD_CHRG_AMT  = #{adultAddChrgAmt},
+               CHILD_ADD_CHRG_AMT  = #{childAddChrgAmt},
+               INFANT_ADD_CHRG_AMT = #{infantAddChrgAmt},
+               CHKIN_TIME          = #{chkinTime},
+               CHKOUT_TIME         = #{chkoutTime},
+               LATE_CHKOUT_TIME    = #{lateChkoutTime},
+               RSVT_CNFIRM_CD      = #{rsvtCnfirmCd},
+               CNCL_RFND_PLCY_CN   = #{cnclRfndPlcyCn},
+               PBTRNSP_GUIDE_CN    = #{pbtrnspGuideCn},
+               NOTICE_CN           = #{noticeCn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 일자별 대표요금 설정(주중/금/토/성수기 4구간 전체 SET) — 본인 소유 + 미삭제. 미전송 구간은 NULL 로 교체 -->
+    <update id="updateHouseDailyRate">
+        UPDATE HOUSE
+           SET WEEKDAY_RATE_AMT  = #{weekdayRateAmt},
+               FRIDAY_RATE_AMT   = #{fridayRateAmt},
+               SATURDAY_RATE_AMT = #{saturdayRateAmt},
+               PEAK_RATE_AMT     = #{peakRateAmt},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 정기휴관 설정(주간휴관요일·공휴일·명절 휴무 전체 SET) — 본인 소유 + 미삭제 -->
+    <update id="updateHouseRegularClosure">
+        UPDATE HOUSE
+           SET CLOSED_WKDAY_CD         = #{closedWkdayCd},
+               HOLIDAY_CLOSED_YN       = #{holidayClosedYn},
+               LUNAR_HOLIDAY_CLOSED_YN = #{lunarHolidayClosedYn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="softDeleteHouse">
+        UPDATE HOUSE
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- ===== 운영자(전 판매자 대상, 소유권 필터 없음) ===== -->
+
+    <sql id="operatorListWhere">
+        WHERE H.DEL_YN = 'N'
+        <if test="status != null and status != ''"> AND H.HOUSE_STTS_CD = #{status} </if>
+        <if test="prtnrSn != null"> AND H.PRTNR_SN = #{prtnrSn} </if>
+        <if test="sidoRegionCd != null and sidoRegionCd != ''"> AND H.SIDO_REGION_CD = #{sidoRegionCd} </if>
+        <if test="sigunguRegionCd != null and sigunguRegionCd != ''"> AND H.SIGUNGU_REGION_CD = #{sigunguRegionCd} </if>
+        <!-- 고택명 OR 파트너 상호(CONM). 상호는 EXISTS 서브쿼리로 — count 쿼리(PRTNR_MST 미조인)에서도 안전. -->
+        <if test="keyword != null and keyword != ''">
+            AND ( H.HOUSE_NM LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\\'
+                  OR EXISTS (SELECT 1 FROM PRTNR_MST PK
+                              WHERE PK.PRTNR_SN = H.PRTNR_SN
+                                AND PK.CONM LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\\') )
+        </if>
+    </sql>
+
+    <select id="selectHouseListForOperator" resultType="egovframework.eeum.house.vo.HouseVO">
+        SELECT H.HOUSE_SN, H.PRTNR_SN, H.HOUSE_NM, H.HOUSE_STTS_CD, H.ADDR, H.REG_DT, H.MDFCN_DT,
+               P.CONM AS PRTNR_CONM,
+               (SELECT U.USER_NM FROM USER_ACNT U WHERE U.USER_SN = H.RGTR_SN) AS CREATOR_NM,
+               (SELECT COUNT(*) FROM ROOM R WHERE R.HOUSE_SN = H.HOUSE_SN AND R.DEL_YN = 'N') AS ROOM_CNT,
+               (SELECT HI.ATCH_FILE_SN FROM HOUSE_IMAGE HI
+                 WHERE HI.HOUSE_SN = H.HOUSE_SN AND HI.DEL_YN = 'N' AND HI.RPRS_YN = 'Y' LIMIT 1) AS RPRS_ATCH_FILE_SN
+          FROM HOUSE H
+          JOIN PRTNR_MST P ON P.PRTNR_SN = H.PRTNR_SN
+        <include refid="operatorListWhere"/>
+         ORDER BY H.HOUSE_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countHouseListForOperator" resultType="long">
+        SELECT COUNT(*)
+          FROM HOUSE H
+        <include refid="operatorListWhere"/>
+    </select>
+
+    <!-- 비삭제 고택 중 시도지역코드 미설정 건수 — filter-options regionUnmappedCount(미매핑 데이터 개수, UX 안내용). 지역필터 기능은 항상 지원(regionFilter=false), 이 값과 무관. -->
+    <select id="countHousesWithoutRegion" resultType="long">
+        SELECT COUNT(*) FROM HOUSE WHERE DEL_YN = 'N' AND SIDO_REGION_CD IS NULL
+    </select>
+
+    <update id="forceSuspendHouse">
+        UPDATE HOUSE
+           SET HOUSE_STTS_CD = 'SUSPENDED',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+           AND HOUSE_STTS_CD &lt;&gt; 'SUSPENDED'
+    </update>
+
+    <update id="releaseHouse">
+        UPDATE HOUSE
+           SET HOUSE_STTS_CD = 'HIDDEN',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+           AND HOUSE_STTS_CD = 'SUSPENDED'
+    </update>
+
+    <!-- 검수 상태 전이 — 소스상태(fromSttsCd) + 미삭제 가드(경합 방지, 0=상태불일치). 운영자 전용(소유권 제한 없음, suspend 계열과 동일). -->
+    <update id="transitionHouseReviewStatus">
+        UPDATE HOUSE
+           SET HOUSE_STTS_CD = #{toSttsCd},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+           AND HOUSE_STTS_CD = #{fromSttsCd}
+    </update>
+
+    <!-- 검수이력 append(REQUEST/APPROVE/REJECT/REVERT — 반려사유 등 감사/조회 저장). -->
+    <insert id="insertHouseReviewHstry" parameterType="egovframework.eeum.house.vo.HouseReviewHstryVO"
+            useGeneratedKeys="true" keyProperty="houseReviewHstrySn">
+        INSERT INTO HOUSE_REVIEW_HSTRY (
+            HOUSE_SN, RVW_ACTN_CD, BFR_STTS_CD, AFT_STTS_CD, ACTR_USER_SN, RJCT_RSN, REG_DT
+        ) VALUES (
+            #{houseSn}, #{rvwActnCd}, #{bfrSttsCd}, #{aftSttsCd}, #{actrUserSn}, #{rjctRsn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+</mapper>

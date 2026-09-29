@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.file.service.file.dao.FileMapper">
+
+    <!-- 즉시연결(LINKED) 업로드 — 공개 이미지/프로필 등 업로드 시점에 바로 확정. 선업로드(TEMP)는 별도(Phase 2). -->
+    <insert id="insertAtchFile" parameterType="egovframework.eeum.file.vo.AtchFileVO"
+            useGeneratedKeys="true" keyProperty="atchFileSn">
+        INSERT INTO ATCH_FILE (
+            FILE_SCOPE_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+            STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+            SCAN_STTS_CD, ATCH_STTS_CD, LINKED_DT, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{fileScopeCd}, #{trgtType}, #{trgtId}, #{orgnlFileNm}, #{strgFileNm},
+            #{strgTypeCd}, #{strgKey}, #{urlAddr}, #{mimeTypeNm}, #{extnNm}, #{fileSz},
+            #{scanSttsCd}, 'LINKED', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+    </insert>
+
+    <!-- 업로더 본인의 최근 24시간 업로드 사용량(건수·누적용량) — 쿼터 검증용. REG_DT 는 UTC instant.
+         스코프(FILE_SCOPE_CD)별 집계: 공개이미지/프로필 등 정책이 다른 스코프가 서로 쿼터를 잠식하지 않도록 분리(codex 교차검토 Medium 5).
+         삭제 여부(DEL_YN) 무관 집계: soft delete 후에도 물리파일은 best-effort라 잔존 가능 → 고갈방어는 "업로드 행위" 기준(codex 교차검토). -->
+    <select id="selectRecentUploadUsage" resultType="egovframework.eeum.file.vo.UploadUsageVO">
+        SELECT COUNT(*)               AS uploadCount,
+               COALESCE(SUM(FILE_SZ), 0) AS totalBytes
+          FROM ATCH_FILE
+         WHERE RGTR_SN = #{rgtrSn}
+           AND FILE_SCOPE_CD = #{fileScopeCd}
+           AND REG_DT >= UTC_TIMESTAMP(6) - INTERVAL 1 DAY
+    </select>
+
+    <!-- 공개 다운로드/상세 — 공개 스코프 allowlist + 연결완료(LINKED) + 미삭제 강제(IDOR/열거 + 비공개 INQR_ATTACH 누수 방어, codex 교차검토) -->
+    <select id="selectPublicImageBySn" resultType="egovframework.eeum.file.vo.AtchFileVO">
+        SELECT ATCH_FILE_SN, FILE_SCOPE_CD, ATCH_VISBLTY_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+               STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+               SCAN_STTS_CD, SCAN_DT, ATCH_STTS_CD, TEMP_EXPIRE_DT, LINKED_DT,
+               REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN, DEL_YN
+          FROM ATCH_FILE
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD IN ('PUBLIC_IMAGE', 'PROFILE_IMAGE', 'REVIEW_IMAGE')
+           AND ATCH_STTS_CD = 'LINKED'
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 범용 삭제(/files/delete) — PUBLIC_IMAGE 스코프만 허용. 프로필(PROFILE_IMAGE) 등 도메인 소유 파일은
+         범용 삭제 경로로 못 지우게 막아 USER_DTL_INFO.PRFL_IMG_FILE_SN 참조가 깨지는 것을 방지(codex 교차검토 High 1). -->
+    <select id="selectDeletablePublicImageBySn" resultType="egovframework.eeum.file.vo.AtchFileVO">
+        SELECT ATCH_FILE_SN, FILE_SCOPE_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+               STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+               SCAN_STTS_CD, SCAN_DT, ATCH_STTS_CD, TEMP_EXPIRE_DT, LINKED_DT,
+               REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN, DEL_YN
+          FROM ATCH_FILE
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD = 'PUBLIC_IMAGE'
+           AND ATCH_STTS_CD = 'LINKED'
+           AND DEL_YN = 'N'
+    </select>
+
+    <update id="softDeleteAtchFile">
+        UPDATE ATCH_FILE
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- ===== 선업로드-후연결(TEMP/LINKED) — 문의 첨부(INQR_ATTACH) ===== -->
+
+    <!-- 임시(TEMP) 업로드 — 연결 전이라 TRGT_TYPE/TRGT_ID 비움. TEMP_EXPIRE_DT=현재(UTC)+TTL시간. 희망 공개성 보존(확정은 연결 시점). -->
+    <insert id="insertTempAttachment"
+            useGeneratedKeys="true" keyProperty="atchFile.atchFileSn">
+        INSERT INTO ATCH_FILE (
+            FILE_SCOPE_CD, ATCH_VISBLTY_CD, ORGNL_FILE_NM, STRG_FILE_NM,
+            STRG_TYPE_CD, STRG_KEY, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+            SCAN_STTS_CD, ATCH_STTS_CD, TEMP_EXPIRE_DT, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{atchFile.fileScopeCd}, #{atchFile.atchVisbltyCd}, #{atchFile.orgnlFileNm}, #{atchFile.strgFileNm},
+            #{atchFile.strgTypeCd}, #{atchFile.strgKey}, #{atchFile.mimeTypeNm}, #{atchFile.extnNm}, #{atchFile.fileSz},
+            #{atchFile.scanSttsCd}, 'TEMP', UTC_TIMESTAMP(6) + INTERVAL #{ttlHours} HOUR, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{atchFile.rgtrSn}
+        )
+    </insert>
+
+    <!-- 연결 검증용 1건(FOR UPDATE) — raw 메타(상태/만료/대상/소유자). 검증 분기는 서비스. -->
+    <select id="selectForLink" resultType="egovframework.eeum.file.vo.AtchFileVO">
+        SELECT ATCH_FILE_SN, FILE_SCOPE_CD, ATCH_VISBLTY_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+               STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+               SCAN_STTS_CD, SCAN_DT, ATCH_STTS_CD, TEMP_EXPIRE_DT, LINKED_DT,
+               REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN, DEL_YN
+          FROM ATCH_FILE
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+         FOR UPDATE
+    </select>
+
+    <!-- TEMP → LINKED 전이 + 대상/연결일시/공개성 확정. 조건을 WHERE 로 재강제(경합·중복연결 방어) — 0건이면 검증실패.
+         TRGT_ID 는 VARCHAR(50) — String(String.valueOf(inqrSn))로 대입(암묵변환·인덱스 저하 방지, codex Low 7).
+         미연결 재강제(TRGT_TYPE/TRGT_ID IS NULL)로 이미 타 문의에 연결된 TEMP 의 중복연결 차단(codex Med 4). -->
+    <update id="linkAttachment">
+        UPDATE ATCH_FILE
+           SET ATCH_STTS_CD = 'LINKED',
+               TRGT_TYPE = 'INQR',
+               TRGT_ID = #{trgtId},
+               ATCH_VISBLTY_CD = #{atchVisbltyCd},
+               LINKED_DT = UTC_TIMESTAMP(6),
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND ATCH_STTS_CD = 'TEMP'
+           AND DEL_YN = 'N'
+           AND RGTR_SN = #{mdfrSn}
+           AND TRGT_TYPE IS NULL
+           AND TRGT_ID IS NULL
+           AND (TEMP_EXPIRE_DT IS NULL OR TEMP_EXPIRE_DT >= UTC_TIMESTAMP(6))
+    </update>
+
+    <!-- 문의 첨부 1건 연결해제(soft delete) — 해당 문의에 LINKED 된 INQR_ATTACH 1건만. 0건이면 경합(이미 해제/타문의).
+         공개스코프용 softDeleteAtchFile 과 달리 scope/연결/소속을 WHERE 로 강제(INQR_ATTACH 를 실제로 지움, codex High 1).
+         TRGT_ID 는 String 비교(VARCHAR — codex Low 7). -->
+    <update id="unlinkInquiryAttachment">
+        UPDATE ATCH_FILE
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{actorUserSn}
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND ATCH_STTS_CD = 'LINKED'
+           AND TRGT_TYPE = 'INQR'
+           AND TRGT_ID = #{trgtId}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 만료 TEMP 전용 조건부 soft delete — 정리잡이 읽은 뒤 그새 LINKED/삭제되면 0건(물리삭제도 skip, TTL 경합 방어 codex High 2). -->
+    <update id="softDeleteExpiredTempAttachment">
+        UPDATE ATCH_FILE
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6)
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND ATCH_STTS_CD = 'TEMP'
+           AND TRGT_TYPE IS NULL
+           AND TRGT_ID IS NULL
+           AND TEMP_EXPIRE_DT &lt; UTC_TIMESTAMP(6)
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 단건 첨부 공개성 변경(공개글 수정 시 기존 첨부 PUBLIC↔PRIVATE 반영) — INQR_ATTACH+LINKED 한정(codex Med 3). -->
+    <update id="updateAttachmentVisibility">
+        UPDATE ATCH_FILE
+           SET ATCH_VISBLTY_CD = #{visibility},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{actorUserSn}
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND ATCH_STTS_CD = 'LINKED'
+           AND DEL_YN = 'N'
+           AND ATCH_VISBLTY_CD &lt;&gt; #{visibility}
+    </update>
+
+    <!-- 문의에 연결된 활성 첨부 목록(상세 응답/수정 시 유지·해제 판정). -->
+    <select id="selectAttachmentsByInquiry" resultType="egovframework.eeum.file.vo.AtchFileVO">
+        SELECT ATCH_FILE_SN, FILE_SCOPE_CD, ATCH_VISBLTY_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+               STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+               SCAN_STTS_CD, SCAN_DT, ATCH_STTS_CD, TEMP_EXPIRE_DT, LINKED_DT,
+               REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN, DEL_YN
+          FROM ATCH_FILE
+         WHERE FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND TRGT_TYPE = 'INQR'
+           AND TRGT_ID = #{trgtId}
+           AND ATCH_STTS_CD = 'LINKED'
+           AND DEL_YN = 'N'
+         ORDER BY ATCH_FILE_SN
+    </select>
+
+    <!-- 문의 공개→비밀 전환 보정 — 연결된 활성 첨부 전부 공개성 강제(전이 규칙). -->
+    <update id="updateVisibilityByInquiry">
+        UPDATE ATCH_FILE
+           SET ATCH_VISBLTY_CD = #{atchVisbltyCd},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND TRGT_TYPE = 'INQR'
+           AND TRGT_ID = #{trgtId}
+           AND ATCH_STTS_CD = 'LINKED'
+           AND DEL_YN = 'N'
+           AND ATCH_VISBLTY_CD &lt;&gt; #{atchVisbltyCd}
+    </update>
+
+    <!-- 다운로드 권한판정용 — 문의 첨부 1건(INQR 연결·미삭제). 권한 분기는 서비스(PUBLIC=누구나/PRIVATE=작성자·운영자). -->
+    <select id="selectInquiryAttachmentForDownload" resultType="egovframework.eeum.file.vo.AtchFileVO">
+        SELECT ATCH_FILE_SN, FILE_SCOPE_CD, ATCH_VISBLTY_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+               STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+               SCAN_STTS_CD, SCAN_DT, ATCH_STTS_CD, TEMP_EXPIRE_DT, LINKED_DT,
+               REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN, DEL_YN
+          FROM ATCH_FILE
+         WHERE ATCH_FILE_SN = #{atchFileSn}
+           AND FILE_SCOPE_CD = 'INQR_ATTACH'
+           AND TRGT_TYPE = 'INQR'
+           AND ATCH_STTS_CD = 'LINKED'
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 만료된 미연결 TEMP 첨부 — TTL 정리잡 대상(IX_ATCH_FILE_TEMP_EXPIRE 활용).
+         삭제 SQL(softDeleteExpiredTempAttachment)과 동일하게 INQR_ATTACH 스코프로 한정 — 미래 다른 TEMP 스코프가 같은 행으로 반복 조회되는 것 방지(codex Low 5). -->
+    <select id="selectExpiredTempAttachments" resultType="egovframework.eeum.file.vo.AtchFileVO">
+        SELECT ATCH_FILE_SN, FILE_SCOPE_CD, ATCH_VISBLTY_CD, TRGT_TYPE, TRGT_ID, ORGNL_FILE_NM, STRG_FILE_NM,
+               STRG_TYPE_CD, STRG_KEY, URL_ADDR, MIME_TYPE_NM, EXTN_NM, FILE_SZ,
+               SCAN_STTS_CD, SCAN_DT, ATCH_STTS_CD, TEMP_EXPIRE_DT, LINKED_DT,
+               REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN, DEL_YN
+          FROM ATCH_FILE
+         <!-- 전 scope 미연결 만료 TEMP — 정리 책임은 파일첨부 도메인(FileAttachmentCleanupJob). scope 무관(TEMP=미연결이라 도메인소유 아님, codex 승인). -->
+         WHERE ATCH_STTS_CD = 'TEMP'
+           AND DEL_YN = 'N'
+           AND TEMP_EXPIRE_DT IS NOT NULL
+           AND TEMP_EXPIRE_DT &lt; UTC_TIMESTAMP(6)
+         ORDER BY TEMP_EXPIRE_DT, ATCH_FILE_SN
+         LIMIT #{limit}
+    </select>
+
+</mapper>

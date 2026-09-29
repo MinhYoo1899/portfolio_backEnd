@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.reservation.service.operator.dao.OperatorReservationMapper">
+
+    <!-- 목록 공용 필터(미삭제 + 상태/기간(체크인)/키워드). 키워드 = 고택명 OR 주문번호 OR 예약자명(EXISTS) -->
+    <sql id="opReservationWhere">
+        WHERE R.DEL_YN = 'N'
+        <if test="status != null and status != ''"> AND R.RESERVATION_STTS_CD = #{status} </if>
+        <if test="startDate != null"> AND R.CHECK_IN_DATE &gt;= #{startDate} </if>
+        <if test="endDate != null">   AND R.CHECK_IN_DATE &lt;= #{endDate} </if>
+        <if test="keyword != null and keyword != ''">
+            AND ( H.HOUSE_NM LIKE CONCAT('%', #{keyword}, '%')
+               OR R.ORDER_NO LIKE CONCAT('%', #{keyword}, '%')
+               OR EXISTS (SELECT 1 FROM RESERVATION_GUEST GK
+                           WHERE GK.RESERVATION_SN = R.RESERVATION_SN
+                             AND GK.DEL_YN = 'N'
+                             AND GK.GUEST_NM LIKE CONCAT('%', #{keyword}, '%')) )
+        </if>
+    </sql>
+
+    <!-- 조회 컬럼(집계 — 객실명/예약자명/최신결제 상관 서브쿼리, 게스트 전화는 미SELECT) -->
+    <sql id="opReservationColumns">
+        R.RESERVATION_SN, R.ORDER_NO, R.RESERVATION_STTS_CD, R.HOUSE_SN, H.HOUSE_NM,
+        R.GUEST_CNT, R.CHECK_IN_DATE, R.CHECK_OUT_DATE, R.NGT_CNT, R.TOTAL_AMT, R.REG_DT,
+        (SELECT I.ROOM_NM_SNAP FROM RESERVATION_ITEM I
+          WHERE I.RESERVATION_SN = R.RESERVATION_SN AND I.DEL_YN = 'N'
+          ORDER BY I.RESERVATION_ITEM_SN LIMIT 1) AS ROOM_NM_SNAP,
+        (SELECT G.GUEST_NM FROM RESERVATION_GUEST G
+          WHERE G.RESERVATION_SN = R.RESERVATION_SN AND G.GUEST_TYPE_CD = 'RESERVER' AND G.DEL_YN = 'N'
+          LIMIT 1) AS GUEST_NM,
+        P.PAYMENT_STTS_CD, P.PG_PRVDR_CD, P.APRV_DT
+    </sql>
+
+    <!-- 최신 결제 조인(예약당 최신 PAYMENT 1건, 없으면 null) -->
+    <sql id="opReservationFrom">
+        FROM RESERVATION R
+        LEFT JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN
+        LEFT JOIN PAYMENT P ON P.PAYMENT_SN =
+            (SELECT MAX(P2.PAYMENT_SN) FROM PAYMENT P2
+              WHERE P2.RESERVATION_SN = R.RESERVATION_SN AND P2.DEL_YN = 'N')
+    </sql>
+
+    <!-- 목록 — 미삭제 + 필터 + 오프셋 페이지네이션, 결정적 정렬(SN DESC) -->
+    <select id="selectOperatorReservationList" resultType="egovframework.eeum.reservation.vo.OperatorReservationVO">
+        SELECT <include refid="opReservationColumns"/>
+        <include refid="opReservationFrom"/>
+        <include refid="opReservationWhere"/>
+         ORDER BY R.RESERVATION_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 목록 총건수(동일 필터, HOUSE 조인은 키워드 검색용) -->
+    <select id="countOperatorReservation" resultType="long">
+        SELECT COUNT(*)
+          FROM RESERVATION R
+          LEFT JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN
+        <include refid="opReservationWhere"/>
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectOperatorReservationDetail" resultType="egovframework.eeum.reservation.vo.OperatorReservationVO">
+        SELECT <include refid="opReservationColumns"/>
+        <include refid="opReservationFrom"/>
+         WHERE R.RESERVATION_SN = #{reservationSn}
+           AND R.DEL_YN = 'N'
+    </select>
+
+</mapper>

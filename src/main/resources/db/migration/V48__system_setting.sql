@@ -1,0 +1,75 @@
+-- =============================================================================
+-- V48 : 시스템 설정(SYSTEM_SETTING 단일행) + 외부연동 목록(SYSTEM_INTEGRATION) + 권한(SYSTEM_VIEW/SYSTEM_MNG)
+-- 설계(2026-07-08, 화면정의서 시스템설정 §1/§2/§4 확정값):
+--   서비스 기본정보(서비스명·고객센터·이메일·팩스) + 보안(자동로그아웃 분·비밀번호 변경주기) 단일 설정행(SN=1 seed).
+--   외부연동 6종 목록 = 이름 + 연동상태(CONNECTED/DISCONNECTED/ERROR). 상태는 우선 seed(CONNECTED), 키/시크릿 관리는 후속.
+--   저장=PUT(전체), 초기화=서버 기본값 복원. 권한 SYSTEM_VIEW(STAFF↑)/SYSTEM_MNG(SUPERVISOR — 설정 민감).
+--   ★보안값 실적용(세션타임아웃·비번만료 로직 연결)은 별도(기존 로직 수정=사전보고). 본 마이그레이션은 저장/조회만.
+-- =============================================================================
+
+-- 1) 시스템 설정(단일행) --------------------------------------------------------
+CREATE TABLE SYSTEM_SETTING (
+    SYSTEM_SETTING_SN      BIGINT       NOT NULL             COMMENT '설정일련번호(단일행=1)',
+    SERVICE_NM             VARCHAR(100) NOT NULL             COMMENT '서비스명',
+    CS_CENTER_TELNO        VARCHAR(30)  NULL                 COMMENT '고객센터 연락처',
+    OPRT_EML_ADDR          VARCHAR(200) NULL                 COMMENT '운영 이메일',
+    FAX_NO                 VARCHAR(30)  NULL                 COMMENT '팩스',
+    AUTO_LOGOUT_MIN        INT          NOT NULL DEFAULT 30  COMMENT '자동 로그아웃(분: 10/30/60/120)',
+    PSWD_CHG_CYCLE_CD      VARCHAR(20)  NOT NULL DEFAULT 'M3' COMMENT '비밀번호 변경주기(NONE/M1/M3/M6)',
+    REG_DT                 DATETIME(6)  NOT NULL             COMMENT '등록일시',
+    RGTR_SN                BIGINT       NULL                 COMMENT '등록자',
+    MDFCN_DT               DATETIME(6)  NULL                 COMMENT '수정일시',
+    MDFR_SN                BIGINT       NULL                 COMMENT '수정자',
+    PRIMARY KEY (SYSTEM_SETTING_SN),
+    CONSTRAINT CK_SYSTEM_SETTING_LOGOUT CHECK (AUTO_LOGOUT_MIN IN (10,30,60,120)),
+    CONSTRAINT CK_SYSTEM_SETTING_PWCYCLE CHECK (PSWD_CHG_CYCLE_CD IN ('NONE','M1','M3','M6'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='시스템 설정(단일행)';
+
+INSERT INTO SYSTEM_SETTING (SYSTEM_SETTING_SN, SERVICE_NM, CS_CENTER_TELNO, OPRT_EML_ADDR, FAX_NO, AUTO_LOGOUT_MIN, PSWD_CHG_CYCLE_CD, REG_DT, MDFCN_DT)
+SELECT 1, '이음', '1566-0123', 'help@ipeum.co.kr', '123-4567', 30, 'M3', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM SYSTEM_SETTING WHERE SYSTEM_SETTING_SN = 1);
+
+-- 2) 외부연동 목록 -------------------------------------------------------------
+CREATE TABLE SYSTEM_INTEGRATION (
+    SYSTEM_INTEGRATION_SN BIGINT       NOT NULL AUTO_INCREMENT COMMENT '연동일련번호',
+    INTEGRATION_CD        VARCHAR(50)  NOT NULL                COMMENT '연동식별코드(TOSS_PAYMENTS 등)',
+    INTEGRATION_NM        VARCHAR(100) NOT NULL                COMMENT '연동 서비스명',
+    CONN_STTS_CD          VARCHAR(20)  NOT NULL DEFAULT 'CONNECTED' COMMENT '연동상태(CONNECTED/DISCONNECTED/ERROR)',
+    SORT_ORDER            INT          NOT NULL DEFAULT 0      COMMENT '표시순서',
+    REG_DT                DATETIME(6)  NOT NULL                COMMENT '등록일시',
+    MDFCN_DT              DATETIME(6)  NULL                    COMMENT '수정일시',
+    MDFR_SN               BIGINT       NULL                    COMMENT '수정자',
+    PRIMARY KEY (SYSTEM_INTEGRATION_SN),
+    UNIQUE KEY UX_SYSTEM_INTEGRATION_CD (INTEGRATION_CD),
+    CONSTRAINT CK_SYSTEM_INTEGRATION_STTS CHECK (CONN_STTS_CD IN ('CONNECTED','DISCONNECTED','ERROR'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='시스템 외부연동 목록';
+
+INSERT INTO SYSTEM_INTEGRATION (INTEGRATION_CD, INTEGRATION_NM, CONN_STTS_CD, SORT_ORDER, REG_DT, MDFCN_DT)
+SELECT * FROM (
+    SELECT 'TOSS_PAYMENTS' AS c, '토스페이먼츠 (PG)' AS n, 'CONNECTED' AS s, 1 AS o, UTC_TIMESTAMP(6) AS r, UTC_TIMESTAMP(6) AS m
+    UNION ALL SELECT 'PORTONE', '포트원 (휴대폰 인증)', 'CONNECTED', 2, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+    UNION ALL SELECT 'KAKAO_MAP', '카카오맵 API', 'CONNECTED', 3, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+    UNION ALL SELECT 'SOCIAL_OAUTH', '소셜 로그인 (OAuth)', 'CONNECTED', 4, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+    UNION ALL SELECT 'ALIMTALK', '알림톡 (카카오)', 'CONNECTED', 5, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+    UNION ALL SELECT 'PUBLIC_API_BRNO', '공공 API (사업자 검증)', 'CONNECTED', 6, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+) seed
+ WHERE NOT EXISTS (SELECT 1 FROM SYSTEM_INTEGRATION WHERE INTEGRATION_CD = seed.c);
+
+-- 3) 시스템 권한 (AUTH_MST + ROLE_AUTH) — VIEW=STAFF↑, MNG=SUPERVISOR 전용(설정 민감) ----
+INSERT INTO AUTH_MST (AUTH_CD, AUTH_NM, USE_YN, REG_DT)
+SELECT 'SYSTEM_VIEW', '시스템 설정 조회(운영자)', 'Y', UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM AUTH_MST WHERE AUTH_CD = 'SYSTEM_VIEW' AND DEL_YN = 'N');
+
+INSERT INTO AUTH_MST (AUTH_CD, AUTH_NM, USE_YN, REG_DT)
+SELECT 'SYSTEM_MNG', '시스템 설정 관리(SUPERVISOR — 저장/초기화)', 'Y', UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM AUTH_MST WHERE AUTH_CD = 'SYSTEM_MNG' AND DEL_YN = 'N');
+
+INSERT INTO ROLE_AUTH (ROLE_SN, AUTH_SN, REG_DT)
+SELECT R.ROLE_SN, A.AUTH_SN, UTC_TIMESTAMP(6)
+  FROM ROLE_MST R
+  JOIN AUTH_MST A
+    ON (R.ROLE_CD = 'OPERATOR_STAFF'      AND A.AUTH_CD = 'SYSTEM_VIEW')
+    OR (R.ROLE_CD = 'OPERATOR_SUPERVISOR' AND A.AUTH_CD IN ('SYSTEM_VIEW','SYSTEM_MNG'))
+ WHERE R.DEL_YN = 'N' AND A.DEL_YN = 'N'
+   AND NOT EXISTS (SELECT 1 FROM ROLE_AUTH RA
+                    WHERE RA.ROLE_SN = R.ROLE_SN AND RA.AUTH_SN = A.AUTH_SN AND RA.DEL_YN = 'N');

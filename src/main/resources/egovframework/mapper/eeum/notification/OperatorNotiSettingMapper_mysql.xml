@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.notification.service.setting.dao.OperatorNotiSettingMapper">
+
+    <!-- 운영자 경계 검증 — JWT 만 신뢰하지 않고 DB 기준. OPERATOR·미삭제만 true. -->
+    <select id="existsOperator" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM USER_ACNT
+             WHERE USER_SN = #{userSn}
+               AND USER_TYPE_CD = 'OPERATOR'
+               AND DEL_YN = 'N')
+    </select>
+
+    <select id="selectByUserSn" resultType="egovframework.eeum.notification.vo.OperatorNotiSettingVO">
+        SELECT USER_SN, RSVT_NOTI_YN, INQR_NOTI_YN, STLM_NOTI_YN, MKTG_NOTI_YN, REG_DT, MDFCN_DT
+          FROM OPERATOR_NOTI_SETTING
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 upsert — 최초 INSERT 시 RGTR_SN=본인·MDFCN_DT=REG_DT, 이후 UPDATE 는 MDFR_SN=본인·MDFCN_DT 갱신. -->
+    <insert id="upsert">
+        INSERT INTO OPERATOR_NOTI_SETTING (
+            USER_SN, RSVT_NOTI_YN, INQR_NOTI_YN, STLM_NOTI_YN, MKTG_NOTI_YN, REG_DT, MDFCN_DT, RGTR_SN, DEL_YN
+        ) VALUES (
+            #{userSn}, #{rsvtNotiYn}, #{inqrNotiYn}, #{stlmNotiYn}, #{mktgNotiYn},
+            UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn}, 'N'
+        )
+        ON DUPLICATE KEY UPDATE
+            RSVT_NOTI_YN = VALUES(RSVT_NOTI_YN),
+            INQR_NOTI_YN = VALUES(INQR_NOTI_YN),
+            STLM_NOTI_YN = VALUES(STLM_NOTI_YN),
+            MKTG_NOTI_YN = VALUES(MKTG_NOTI_YN),
+            MDFCN_DT     = UTC_TIMESTAMP(6),
+            MDFR_SN      = #{userSn},
+            DEL_YN       = 'N'
+    </insert>
+
+</mapper>

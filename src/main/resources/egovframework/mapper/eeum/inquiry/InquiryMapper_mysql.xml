@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.inquiry.service.inquiry.dao.InquiryMapper">
+
+    <!-- ===== 문의글 ===== -->
+
+    <insert id="insertInquiry" parameterType="egovframework.eeum.inquiry.vo.InqrInfoVO"
+            useGeneratedKeys="true" keyProperty="inqrSn">
+        INSERT INTO INQR_INFO (
+            USER_SN, INQR_TYPE_CD, INQR_TTL, INQR_CN, PRVT_PST_YN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{userSn}, #{inqrTypeCd}, #{inqrTtl}, #{inqrCn}, #{prvtPstYn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn}
+        )
+        <!-- ANS_STTS_CD='PENDING', PSTG_STTS_CD='NORMAL', DEL_YN='N' 은 DB 기본값 -->
+    </insert>
+
+    <select id="selectInquiryDetail" resultType="egovframework.eeum.inquiry.vo.InqrInfoVO">
+        SELECT I.INQR_SN, I.USER_SN, I.INQR_TYPE_CD, I.INQR_TTL, I.INQR_CN, I.PRVT_PST_YN,
+               I.ANS_STTS_CD, I.PSTG_STTS_CD, I.PSTG_STTS_RSN, I.REG_DT,
+               U.USER_NM AS WRITER_NM
+          FROM INQR_INFO I
+          JOIN USER_ACNT U ON U.USER_SN = I.USER_SN
+         WHERE I.INQR_SN = #{inqrSn}
+           AND I.DEL_YN = 'N'
+    </select>
+
+    <select id="selectInquiryForUpdate" resultType="egovframework.eeum.inquiry.vo.InqrInfoVO">
+        SELECT INQR_SN, USER_SN, PRVT_PST_YN, ANS_STTS_CD, PSTG_STTS_CD, DEL_YN
+          FROM INQR_INFO
+         WHERE INQR_SN = #{inqrSn}
+         FOR UPDATE
+    </select>
+
+    <!-- 목록 공통 WHERE — 블라인드 가시성(운영자만)·내글·유형·상태·검색(비밀글 검색 제한) -->
+    <sql id="listWhere">
+        WHERE I.DEL_YN = 'N'
+          AND (I.PSTG_STTS_CD = 'NORMAL' OR #{isOperator} = 'Y')
+        <if test="mine"> AND I.USER_SN = #{viewerSn} </if>
+        <if test="inqrType != null and inqrType != ''"> AND I.INQR_TYPE_CD = #{inqrType} </if>
+        <if test="ansStts != null and ansStts != ''"> AND I.ANS_STTS_CD = #{ansStts} </if>
+        <if test="keyword != null and keyword != ''">
+            AND I.INQR_TTL LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\\'
+            AND (I.PRVT_PST_YN = 'N' OR I.USER_SN = #{viewerSn} OR #{isOperator} = 'Y')
+        </if>
+    </sql>
+
+    <!-- 목록 SELECT 컬럼 — 비밀글 비인가자에겐 제목/작성자명 NULL 마스킹(SQL 강제) -->
+    <sql id="listColumns">
+        I.INQR_SN, I.INQR_TYPE_CD, I.PRVT_PST_YN, I.ANS_STTS_CD, I.PSTG_STTS_CD, I.REG_DT,
+        CASE WHEN I.PRVT_PST_YN = 'Y' AND I.USER_SN &lt;&gt; #{viewerSn} AND #{isOperator} = 'N'
+             THEN NULL ELSE I.INQR_TTL END AS INQR_TTL,
+        CASE WHEN I.PRVT_PST_YN = 'Y' AND I.USER_SN &lt;&gt; #{viewerSn} AND #{isOperator} = 'N'
+             THEN NULL ELSE U.USER_NM END AS WRITER_NM,
+        (SELECT COUNT(*) FROM INQR_ANS_INFO A WHERE A.INQR_SN = I.INQR_SN AND A.DEL_YN = 'N') AS ANSWER_CNT
+    </sql>
+
+    <select id="selectInquiryListOffset" resultType="egovframework.eeum.inquiry.vo.InqrInfoVO">
+        SELECT <include refid="listColumns"/>
+          FROM INQR_INFO I
+          JOIN USER_ACNT U ON U.USER_SN = I.USER_SN
+        <include refid="listWhere"/>
+         ORDER BY I.INQR_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countInquiryList" resultType="long">
+        SELECT COUNT(*)
+          FROM INQR_INFO I
+        <include refid="listWhere"/>
+    </select>
+
+    <select id="selectInquiryListCursor" resultType="egovframework.eeum.inquiry.vo.InqrInfoVO">
+        SELECT <include refid="listColumns"/>
+          FROM INQR_INFO I
+          JOIN USER_ACNT U ON U.USER_SN = I.USER_SN
+        <include refid="listWhere"/>
+        <if test="cursor != null"> AND I.INQR_SN &lt; #{cursor} </if>
+         ORDER BY I.INQR_SN DESC
+         LIMIT #{limit}
+    </select>
+
+    <update id="updateInquiry">
+        UPDATE INQR_INFO
+           SET INQR_TYPE_CD = #{inqrTypeCd},
+               INQR_TTL = #{inqrTtl},
+               INQR_CN = #{inqrCn},
+               PRVT_PST_YN = #{prvtPstYn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE INQR_SN = #{inqrSn}
+           AND USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="softDeleteInquiry">
+        UPDATE INQR_INFO
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE INQR_SN = #{inqrSn}
+           AND USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="updateAnswStts">
+        UPDATE INQR_INFO
+           SET ANS_STTS_CD = #{ansSttsCd},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE INQR_SN = #{inqrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="blindInquiry">
+        UPDATE INQR_INFO
+           SET PSTG_STTS_CD = 'BLINDED',
+               PSTG_STTS_RSN = #{pstgSttsRsn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE INQR_SN = #{inqrSn}
+           AND DEL_YN = 'N'
+           AND PSTG_STTS_CD = 'NORMAL'
+    </update>
+
+    <update id="unblindInquiry">
+        UPDATE INQR_INFO
+           SET PSTG_STTS_CD = 'NORMAL',
+               PSTG_STTS_RSN = NULL,
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE INQR_SN = #{inqrSn}
+           AND DEL_YN = 'N'
+           AND PSTG_STTS_CD = 'BLINDED'
+    </update>
+
+    <!-- ===== 답변 ===== -->
+
+    <insert id="insertAnswer" parameterType="egovframework.eeum.inquiry.vo.InqrAnsInfoVO"
+            useGeneratedKeys="true" keyProperty="ansSn">
+        INSERT INTO INQR_ANS_INFO (
+            INQR_SN, ANS_USER_SN, ANS_CN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{inqrSn}, #{ansUserSn}, #{ansCn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{ansUserSn}
+        )
+    </insert>
+
+    <select id="selectAnswersByInquiry" resultType="egovframework.eeum.inquiry.vo.InqrAnsInfoVO">
+        SELECT A.ANS_SN, A.INQR_SN, A.ANS_USER_SN, A.ANS_CN, A.REG_DT,
+               U.USER_NM AS ANSR_NM
+          FROM INQR_ANS_INFO A
+          JOIN USER_ACNT U ON U.USER_SN = A.ANS_USER_SN
+         WHERE A.INQR_SN = #{inqrSn}
+           AND A.DEL_YN = 'N'
+         ORDER BY A.REG_DT, A.ANS_SN
+    </select>
+
+    <!-- 비잠금 — 부모 문의를 먼저 FOR UPDATE 하기 위해 inqrSn 만 확보(잠금 순서 일관: 부모→자식) -->
+    <select id="selectAnswer" resultType="egovframework.eeum.inquiry.vo.InqrAnsInfoVO">
+        SELECT ANS_SN, INQR_SN, ANS_USER_SN, DEL_YN
+          FROM INQR_ANS_INFO
+         WHERE ANS_SN = #{ansSn}
+    </select>
+
+    <update id="updateAnswer">
+        UPDATE INQR_ANS_INFO
+           SET ANS_CN = #{ansCn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ANS_SN = #{ansSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="softDeleteAnswer">
+        UPDATE INQR_ANS_INFO
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ANS_SN = #{ansSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <select id="countActiveAnswers" resultType="int">
+        SELECT COUNT(*)
+          FROM INQR_ANS_INFO
+         WHERE INQR_SN = #{inqrSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 문의유형 코드 존재 검증(임의 타입 저장 차단 — codex 코드검토) -->
+    <select id="countActiveInqrType" resultType="int">
+        SELECT COUNT(*)
+          FROM COMM_CD
+         WHERE GROUP_CD = 'INQR_TYPE'
+           AND CD = #{inqrTypeCd}
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+    </select>
+
+</mapper>

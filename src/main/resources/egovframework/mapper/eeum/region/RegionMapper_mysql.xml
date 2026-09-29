@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.region.service.region.dao.RegionMapper">
+
+    <!-- 시도(DEPTH=1) 목록 — 사용중·미삭제, 정렬순서 순. (IX_REGION_DEPTH 활용) -->
+    <select id="selectSidoRegions" resultType="egovframework.eeum.region.vo.RegionVO">
+        SELECT REGION_CD, UPPER_REGION_CD, REGION_DEPTH, REGION_NM, REGION_SHORT_NM, SORT_SEQ
+          FROM REGION
+         WHERE REGION_DEPTH = 1
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+         ORDER BY SORT_SEQ, REGION_CD
+    </select>
+
+    <!-- 시도코드 유효성 — DEPTH=1·사용중·미삭제. -->
+    <select id="countSido" resultType="int">
+        SELECT COUNT(*) FROM REGION
+         WHERE REGION_CD = #{regionCd} AND REGION_DEPTH = 1 AND USE_YN = 'Y' AND DEL_YN = 'N'
+    </select>
+
+    <!-- 시군구가 지정 시도 소속인지 — DEPTH=2·UPPER=sidoCd·사용중·미삭제. -->
+    <select id="countSigunguInSido" resultType="int">
+        SELECT COUNT(*) FROM REGION
+         WHERE REGION_CD = #{sigunguCd} AND UPPER_REGION_CD = #{sidoCd}
+           AND REGION_DEPTH = 2 AND USE_YN = 'Y' AND DEL_YN = 'N'
+    </select>
+
+</mapper>

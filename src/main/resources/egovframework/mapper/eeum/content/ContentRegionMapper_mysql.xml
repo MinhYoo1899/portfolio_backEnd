@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.content.service.region.dao.ContentRegionMapper">
+
+    <!-- 조회 컬럼(미삭제) — status 는 저장 안 함(서비스 산출) -->
+    <sql id="regionColumns">
+        CONTENT_REGION_SN, CATEGORY_CD, TYPE_CD, SIDO_REGION_CD, THUMBNAIL_URL, TITLE, ROUTE_SUMMARY, BODY_CN,
+        VIEW_CNT, CMNT_CNT, EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT
+    </sql>
+
+    <!-- 목록 공용 필터(미삭제 + 카테고리/유형/지역/제목) -->
+    <sql id="regionListWhere">
+        WHERE DEL_YN = 'N'
+        <if test="categoryCd != null and categoryCd != ''">   AND CATEGORY_CD = #{categoryCd}   </if>
+        <if test="typeCd != null and typeCd != ''">           AND TYPE_CD = #{typeCd}           </if>
+        <if test="sidoRegionCd != null and sidoRegionCd != ''"> AND SIDO_REGION_CD = #{sidoRegionCd} </if>
+        <if test="keyword != null and keyword != ''">         AND TITLE LIKE CONCAT('%', #{keyword}, '%') </if>
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), VIEW/CMNT_CNT=0(컬럼 default), PK 생성키 회수 -->
+    <insert id="insertRegion" parameterType="egovframework.eeum.content.vo.ContentRegionVO"
+            useGeneratedKeys="true" keyProperty="contentRegionSn">
+        INSERT INTO CONTENT_REGION
+            (CATEGORY_CD, TYPE_CD, SIDO_REGION_CD, THUMBNAIL_URL, TITLE, ROUTE_SUMMARY, BODY_CN,
+             EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{categoryCd}, #{typeCd}, #{sidoRegionCd}, #{thumbnailUrl}, #{title}, #{routeSummary}, #{bodyCn},
+             #{exposeBgnDate}, #{exposeEndDate}, #{exposeYn}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 미삭제 + 필터 + 오프셋 페이지네이션, 결정적 정렬(SN DESC) -->
+    <select id="selectRegionList" resultType="egovframework.eeum.content.vo.ContentRegionVO">
+        SELECT <include refid="regionColumns"/>
+          FROM CONTENT_REGION
+        <include refid="regionListWhere"/>
+         ORDER BY CONTENT_REGION_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 목록 총건수(동일 필터) -->
+    <select id="countRegion" resultType="long">
+        SELECT COUNT(*)
+          FROM CONTENT_REGION
+        <include refid="regionListWhere"/>
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectRegionById" resultType="egovframework.eeum.content.vo.ContentRegionVO">
+        SELECT <include refid="regionColumns"/>
+          FROM CONTENT_REGION
+         WHERE CONTENT_REGION_SN = #{contentRegionSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 수정(미삭제) — VIEW_CNT/CMNT_CNT 미변경(읽기전용 보존), MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updateRegion" parameterType="egovframework.eeum.content.vo.ContentRegionVO">
+        UPDATE CONTENT_REGION
+           SET CATEGORY_CD     = #{categoryCd},
+               TYPE_CD         = #{typeCd},
+               SIDO_REGION_CD  = #{sidoRegionCd},
+               THUMBNAIL_URL   = #{thumbnailUrl},
+               TITLE           = #{title},
+               ROUTE_SUMMARY   = #{routeSummary},
+               BODY_CN         = #{bodyCn},
+               EXPOSE_BGN_DATE = #{exposeBgnDate},
+               EXPOSE_END_DATE = #{exposeEndDate},
+               EXPOSE_YN       = #{exposeYn},
+               MDFCN_DT        = UTC_TIMESTAMP(6),
+               MDFR_SN         = #{mdfrSn}
+         WHERE CONTENT_REGION_SN = #{contentRegionSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 활성 토글(미삭제) -->
+    <update id="updateRegionExposeYn">
+        UPDATE CONTENT_REGION
+           SET EXPOSE_YN = #{exposeYn},
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{mdfrSn}
+         WHERE CONTENT_REGION_SN = #{contentRegionSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeleteRegion">
+        UPDATE CONTENT_REGION
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE CONTENT_REGION_SN = #{contentRegionSn}
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

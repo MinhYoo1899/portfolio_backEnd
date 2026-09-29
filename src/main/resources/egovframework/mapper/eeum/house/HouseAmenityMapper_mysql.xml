@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.amenity.dao.HouseAmenityMapper">
+
+    <!-- 표출용 — 매핑 활성 + 카탈로그 활성(USE_YN='Y') 항목만 -->
+    <select id="selectActiveAmenitiesByHouse" resultType="egovframework.eeum.house.vo.AmenityVO">
+        SELECT A.AMENITY_SN, A.AMENITY_CTGRY_CD, A.APPLY_SCOPE_CD, A.AMENITY_NM, A.AMENITY_KEY,
+               A.ICON_KEY, A.SORT_SEQ, A.USE_YN, A.CUSTOM_YN
+          FROM HOUSE_AMENITY HA
+          JOIN AMENITY_MST A ON A.AMENITY_SN = HA.AMENITY_SN
+                            AND A.DEL_YN = 'N'
+                            AND A.USE_YN = 'Y'
+                            AND A.APPLY_SCOPE_CD IN ('HOUSE','BOTH')  <!-- 저장 검증과 정합: 고택에 못 붙는 scope(객실전용)는 표출/재전송 대상에서 제외(codex 치명) -->
+         WHERE HA.HOUSE_SN = #{houseSn}
+           AND HA.DEL_YN = 'N'
+         ORDER BY A.AMENITY_CTGRY_CD, A.SORT_SEQ, A.AMENITY_SN
+    </select>
+
+    <select id="selectActiveAmenitySnsByHouse" resultType="long">
+        SELECT AMENITY_SN
+          FROM HOUSE_AMENITY
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <insert id="insertHouseAmenity">
+        INSERT INTO HOUSE_AMENITY (
+            HOUSE_SN, AMENITY_SN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{houseSn}, #{amenitySn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+    </insert>
+
+    <!-- 보존 집합(keepIds)에 없는 활성 매핑 해제 — JOIN HOUSE + prtnrSn 가드. keepIds 비면 전부 해제 -->
+    <update id="softDeleteHouseAmenitiesNotIn">
+        UPDATE HOUSE_AMENITY HA
+          JOIN HOUSE H ON H.HOUSE_SN = HA.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET HA.DEL_YN = 'Y',
+               HA.MDFCN_DT = UTC_TIMESTAMP(6),
+               HA.MDFR_SN = #{mdfrSn}
+         WHERE HA.HOUSE_SN = #{houseSn}
+           AND HA.DEL_YN = 'N'
+        <if test="keepIds != null and keepIds.size() > 0">
+           AND HA.AMENITY_SN NOT IN
+            <foreach collection="keepIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        </if>
+    </update>
+
+</mapper>

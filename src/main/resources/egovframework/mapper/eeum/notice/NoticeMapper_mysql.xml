@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.notice.service.notice.dao.NoticeMapper">
+
+    <!-- 조회 컬럼(미삭제) -->
+    <sql id="noticeColumns">
+        NOTICE_SN, TITLE, CONTENT, TARGET_TYPE_CD, SEND_TIMING_CD, SCHEDULED_AT, PUBLISHED_AT,
+        NOTICE_STTS_CD, NOTIFY_SEND_YN, REG_DT
+    </sql>
+
+    <!-- 목록 공용 필터(미삭제 + 상태/대상/알림/제목) -->
+    <sql id="noticeListWhere">
+        WHERE DEL_YN = 'N'
+        <if test="status != null and status != ''">     AND NOTICE_STTS_CD = #{status} </if>
+        <if test="target != null and target != ''">     AND TARGET_TYPE_CD = #{target} </if>
+        <if test="notifySend != null and notifySend != ''"> AND NOTIFY_SEND_YN = #{notifySend} </if>
+        <if test="keyword != null and keyword != ''">   AND TITLE LIKE CONCAT('%', #{keyword}, '%') </if>
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), PK 생성키 회수 -->
+    <insert id="insertNotice" parameterType="egovframework.eeum.notice.vo.NoticeVO"
+            useGeneratedKeys="true" keyProperty="noticeSn">
+        INSERT INTO NOTICE
+            (TITLE, CONTENT, TARGET_TYPE_CD, SEND_TIMING_CD, SCHEDULED_AT, PUBLISHED_AT,
+             NOTICE_STTS_CD, NOTIFY_SEND_YN, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{title}, #{content}, #{targetTypeCd}, #{sendTimingCd}, #{scheduledAt}, #{publishedAt},
+             #{noticeSttsCd}, #{notifySendYn}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 미삭제 + 필터 + 오프셋 페이지네이션, 결정적 정렬(SN DESC) -->
+    <select id="selectNoticeList" resultType="egovframework.eeum.notice.vo.NoticeVO">
+        SELECT <include refid="noticeColumns"/>
+          FROM NOTICE
+        <include refid="noticeListWhere"/>
+         ORDER BY NOTICE_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 목록 총건수(동일 필터) -->
+    <select id="countNotice" resultType="long">
+        SELECT COUNT(*)
+          FROM NOTICE
+        <include refid="noticeListWhere"/>
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectNoticeById" resultType="egovframework.eeum.notice.vo.NoticeVO">
+        SELECT <include refid="noticeColumns"/>
+          FROM NOTICE
+         WHERE NOTICE_SN = #{noticeSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 편집(미삭제) — 상태/발행일/알림여부 미변경(보존), MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updateNotice" parameterType="egovframework.eeum.notice.vo.NoticeVO">
+        UPDATE NOTICE
+           SET TITLE          = #{title},
+               CONTENT        = #{content},
+               TARGET_TYPE_CD = #{targetTypeCd},
+               SEND_TIMING_CD = #{sendTimingCd},
+               SCHEDULED_AT   = #{scheduledAt},
+               MDFCN_DT       = UTC_TIMESTAMP(6),
+               MDFR_SN        = #{mdfrSn}
+         WHERE NOTICE_SN = #{noticeSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeleteNotice">
+        UPDATE NOTICE
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE NOTICE_SN = #{noticeSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 수동 종료 — 게시중(PUBLISHED_ONGOING)만 CLOSED 로(상태 가드로 경합 차단) -->
+    <update id="closeNotice">
+        UPDATE NOTICE
+           SET NOTICE_STTS_CD = 'CLOSED',
+               MDFCN_DT       = UTC_TIMESTAMP(6),
+               MDFR_SN        = #{mdfrSn}
+         WHERE NOTICE_SN = #{noticeSn}
+           AND NOTICE_STTS_CD = 'PUBLISHED_ONGOING'
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 예약공지 자동승격(cron) — SCHEDULED 중 예약시각 도래분을 게시중+발행일+알림'Y' 로 -->
+    <update id="promoteScheduled">
+        UPDATE NOTICE
+           SET NOTICE_STTS_CD = 'PUBLISHED_ONGOING',
+               PUBLISHED_AT   = UTC_TIMESTAMP(6),
+               NOTIFY_SEND_YN = 'Y',
+               MDFCN_DT       = UTC_TIMESTAMP(6)
+         WHERE NOTICE_STTS_CD = 'SCHEDULED'
+           AND SCHEDULED_AT IS NOT NULL
+           AND SCHEDULED_AT &lt;= UTC_TIMESTAMP(6)
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

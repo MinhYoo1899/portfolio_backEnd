@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  이음 백엔드 로깅 구성(권위) — Boot 기본 Log4j2 대신 이 파일이 로깅 전권을 가진다.
+  - PII 마스킹: 커스텀 %mask{...} converter 가 감싼 부분(메시지+예외)만 마스킹. corrId/레벨/타임스탬프는 밖이라 안 건드림.
+  - stdout(Console) 도 동일 마스킹(codex MUST: journald 누출 방지).
+  - 롤링: 10MB 또는 일 단위 + gz 압축 + 14일/512MB 초과 삭제.
+  - 운영은 LOG_DIR 을 절대경로로 env 주입 권장(예: /var/log/eeum). 미지정 시 ./log.
+  packages 속성으로 커스텀 플러그인 패키지를 스캔한다.
+-->
+<Configuration status="WARN" packages="egovframework.eeum.base.logging">
+	<Properties>
+		<!-- 운영은 LOG_DIR 절대경로 env 권장. 미지정 시 ./log -->
+		<Property name="logDir">${env:LOG_DIR:-./log}</Property>
+		<!-- corrId 는 %mask 밖 — message+예외만 마스킹 -->
+		<Property name="logPattern">%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [cid:%X{corrId}] %c{1.} - %mask{%m%n%xwEx}</Property>
+	</Properties>
+
+	<Appenders>
+		<!-- stdout 도 마스킹(codex MUST: journald 누출 방지) -->
+		<Console name="Console" target="SYSTEM_OUT">
+			<PatternLayout pattern="${logPattern}" />
+		</Console>
+
+		<RollingFile name="RollingFile"
+				fileName="${logDir}/backend.log"
+				filePattern="${logDir}/backend-%d{yyyy-MM-dd}-%i.log.gz">
+			<PatternLayout pattern="${logPattern}" />
+			<Policies>
+				<SizeBasedTriggeringPolicy size="10MB" />
+				<TimeBasedTriggeringPolicy interval="1" modulate="true" />
+			</Policies>
+			<DefaultRolloverStrategy max="50">
+				<Delete basePath="${logDir}" maxDepth="1">
+					<IfFileName glob="backend-*.log.gz" />
+					<IfLastModified age="14d" />
+				</Delete>
+				<Delete basePath="${logDir}" maxDepth="1">
+					<IfFileName glob="backend-*.log.gz" />
+					<IfAccumulatedFileSize exceeds="512MB" />
+				</Delete>
+			</DefaultRolloverStrategy>
+		</RollingFile>
+	</Appenders>
+
+	<Loggers>
+		<!-- MyBatis SQL 파라미터 로그는 root=INFO 라 꺼져 있음 — shared 환경 DEBUG 금지 -->
+		<Root level="INFO">
+			<AppenderRef ref="Console" />
+			<AppenderRef ref="RollingFile" />
+		</Root>
+	</Loggers>
+</Configuration>

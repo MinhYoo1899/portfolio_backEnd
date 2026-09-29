@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.notification.service.notification.dao.OperatorNotificationMapper">
+
+    <!-- 적재 대상 = 지정 권한(AUTH_CD) 보유 활성·미삭제 OPERATOR + 각자의 알림설정(②, 미삭제). 설정 없으면 NULL → 서비스 기본값.
+         권한 조인은 AuthMapper.selectAuthCdsByUserSn 패턴(USER_ROLE→ROLE_MST→ROLE_AUTH→AUTH_MST) 재사용. ALWAYS 유형도 권한 요구. -->
+    <select id="selectActiveOperatorTargets" resultType="egovframework.eeum.notification.vo.NotificationTargetVO">
+        SELECT U.USER_SN, S.RSVT_NOTI_YN, S.INQR_NOTI_YN, S.STLM_NOTI_YN, S.MKTG_NOTI_YN
+          FROM USER_ACNT U
+          LEFT JOIN OPERATOR_NOTI_SETTING S ON S.USER_SN = U.USER_SN AND S.DEL_YN = 'N'
+         WHERE U.USER_TYPE_CD = 'OPERATOR'
+           AND U.ACNT_STTS = 'ACTIVE'
+           AND U.DEL_YN = 'N'
+           AND EXISTS (
+               SELECT 1 FROM USER_ROLE UR
+                 JOIN ROLE_MST R   ON R.ROLE_SN = UR.ROLE_SN AND R.DEL_YN = 'N' AND R.USE_YN = 'Y'
+                 JOIN ROLE_AUTH RA ON RA.ROLE_SN = R.ROLE_SN AND RA.DEL_YN = 'N'
+                 JOIN AUTH_MST A   ON A.AUTH_SN = RA.AUTH_SN AND A.DEL_YN = 'N' AND A.USE_YN = 'Y'
+                WHERE UR.ACTV_USER_SN = U.USER_SN
+                  AND A.AUTH_CD = #{requiredAuthority})
+    </select>
+
+    <!-- 적재 — UNIQUE(RCVR_USER_SN, NOTI_TYPE_CD, EVENT_KEY) 로 (수신자+유형)별 eventKey 중복 방지. 재적재는 no-op(멱등). -->
+    <insert id="insertIfAbsent" parameterType="egovframework.eeum.notification.vo.OperatorNotificationVO">
+        INSERT INTO OPERATOR_NOTIFICATION (
+            RCVR_USER_SN, NOTI_TYPE_CD, EVENT_KEY, NOTI_TTL, NOTI_BODY, TRGT_TYPE_CD, TRGT_ID, LINK_URL,
+            READ_YN, REG_DT, MDFCN_DT, RGTR_SN, DEL_YN
+        ) VALUES (
+            #{rcvrUserSn}, #{notiTypeCd}, #{eventKey}, #{notiTtl}, #{notiBody}, #{trgtTypeCd}, #{trgtId}, #{linkUrl},
+            'N', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}, 'N'
+        )
+        ON DUPLICATE KEY UPDATE OPERATOR_NOTI_SN = OPERATOR_NOTI_SN
+    </insert>
+
+    <!-- 운영자 경계 검증 — JWT 만 신뢰하지 않고 DB 기준. -->
+    <select id="existsOperator" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM USER_ACNT
+             WHERE USER_SN = #{userSn}
+               AND USER_TYPE_CD = 'OPERATOR'
+               AND DEL_YN = 'N')
+    </select>
+
+    <!-- 본인·미삭제·최근 90일 창(조회/집계 공용). -->
+    <sql id="receiverWindow">
+          FROM OPERATOR_NOTIFICATION
+         WHERE RCVR_USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+           AND REG_DT >= UTC_TIMESTAMP(6) - INTERVAL 90 DAY
+    </sql>
+
+    <select id="selectByReceiver" resultType="egovframework.eeum.notification.vo.OperatorNotificationVO">
+        SELECT OPERATOR_NOTI_SN, RCVR_USER_SN, NOTI_TYPE_CD, EVENT_KEY, NOTI_TTL, NOTI_BODY,
+               TRGT_TYPE_CD, TRGT_ID, LINK_URL, READ_YN, RGTR_SN, REG_DT
+        <include refid="receiverWindow"/>
+         ORDER BY OPERATOR_NOTI_SN DESC
+         LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="countByReceiver" resultType="long">
+        SELECT COUNT(*) <include refid="receiverWindow"/>
+    </select>
+
+    <select id="countUnread" resultType="long">
+        SELECT COUNT(*) <include refid="receiverWindow"/>
+           AND READ_YN = 'N'
+    </select>
+
+    <!-- 개별 읽음 — 본인·미읽음·미삭제일 때만 1건(멱등). -->
+    <update id="markRead">
+        UPDATE OPERATOR_NOTIFICATION
+           SET READ_YN = 'Y',
+               READ_DT = UTC_TIMESTAMP(6),
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE OPERATOR_NOTI_SN = #{notiSn}
+           AND RCVR_USER_SN = #{userSn}
+           AND READ_YN = 'N'
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 전체 읽음 — 본인 미읽음 전부. -->
+    <update id="markAllRead">
+        UPDATE OPERATOR_NOTIFICATION
+           SET READ_YN = 'Y',
+               READ_DT = UTC_TIMESTAMP(6),
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE RCVR_USER_SN = #{userSn}
+           AND READ_YN = 'N'
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 보관기간(90일) 경과분 하드 삭제 — ③a NotificationRetentionJob 스케줄러에서 사용. -->
+    <delete id="deleteOlderThan">
+        DELETE FROM OPERATOR_NOTIFICATION WHERE REG_DT &lt; #{cutoff}
+    </delete>
+
+</mapper>

@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.account.service.operator.dao.OperatorMapper">
+
+    <!-- 운영자 = USER_TYPE_CD='OPERATOR' 한정(비OPERATOR 는 조회/수정에서 제외). -->
+    <!-- ⚠ MBL_TELNO 는 암호화 컬럼(crypto-standard §2) — WHERE/JOIN/ORDER BY/LIKE 절 사용 금지, SELECT 목록에서만.
+         복호화는 아래 operatorResult resultMap 의 TypeHandler 로만(resultType 자동매핑 금지). -->
+    <sql id="operatorColumns">
+        U.USER_SN,
+        U.EML_ADDR,
+        U.USER_NM,
+        U.ACNT_STTS,
+        U.MBL_TELNO,
+        U.REG_DT,
+        D.DEPT_NM,
+        D.JBPS_NM,
+        D.MFA_USE_YN
+    </sql>
+
+    <!-- 암호화 컬럼(MBL_TELNO) 복호화용 resultMap — 나머지 컬럼은 autoMapping(카멜) 위임, MBL_TELNO 만 TypeHandler 명시. -->
+    <resultMap id="operatorResult" type="egovframework.eeum.account.vo.OperatorVO" autoMapping="true">
+        <id column="USER_SN" property="userSn"/>
+        <result column="MBL_TELNO" property="mblTelno"
+                typeHandler="egovframework.eeum.base.crypto.MblTelnoEncryptedTypeHandler"/>
+    </resultMap>
+
+    <insert id="insertOperatorDtlInfo">
+        INSERT INTO OPERATOR_DTL_INFO (USER_SN, DEPT_NM, JBPS_NM, MFA_USE_YN, REG_DT, MDFCN_DT, RGTR_SN)
+        VALUES (#{userSn}, #{deptNm}, #{jbpsNm}, 'N', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn})
+    </insert>
+
+    <!-- 운영자 상세/존재확인 — USER_TYPE_CD='OPERATOR' 아니면 0건(null). 상세정보는 LEFT JOIN(행 누락 방어). -->
+    <select id="selectOperatorByUserSn" resultMap="operatorResult">
+        SELECT <include refid="operatorColumns"/>
+          FROM USER_ACNT U
+          LEFT JOIN OPERATOR_DTL_INFO D ON D.USER_SN = U.USER_SN AND D.DEL_YN = 'N'
+         WHERE U.USER_SN = #{userSn}
+           AND U.USER_TYPE_CD = 'OPERATOR'
+           AND U.DEL_YN = 'N'
+    </select>
+
+    <!-- 행 잠금 — 상태/역할/비번초기화 트랜잭션에서 대상행 직렬화(마지막 SUPERVISOR 경합 방지).
+         생성컬럼(LEFT JOIN)과 FOR UPDATE 충돌 회피 위해 USER_ACNT 단독 잠금 후 상세는 별도 채움. -->
+    <select id="selectOperatorForUpdate" resultType="egovframework.eeum.account.vo.OperatorVO">
+        SELECT U.USER_SN, U.EML_ADDR, U.USER_NM, U.ACNT_STTS, U.REG_DT
+          FROM USER_ACNT U
+         WHERE U.USER_SN = #{userSn}
+           AND U.USER_TYPE_CD = 'OPERATOR'
+           AND U.DEL_YN = 'N'
+        FOR UPDATE
+    </select>
+
+    <sql id="listJoinWhere">
+          FROM USER_ACNT U
+          LEFT JOIN OPERATOR_DTL_INFO D ON D.USER_SN = U.USER_SN AND D.DEL_YN = 'N'
+         WHERE U.USER_TYPE_CD = 'OPERATOR'
+           AND U.DEL_YN = 'N'
+        <if test="acntStts != null and acntStts != ''">
+           AND U.ACNT_STTS = #{acntStts}
+        </if>
+        <if test="roleCd != null and roleCd != ''">
+           AND EXISTS (
+               SELECT 1 FROM USER_ROLE UR
+                 JOIN ROLE_MST R ON R.ROLE_SN = UR.ROLE_SN AND R.DEL_YN = 'N' AND R.USE_YN = 'Y'
+                WHERE UR.ACTV_USER_SN = U.USER_SN
+                  AND R.ROLE_CD = #{roleCd})
+        </if>
+    </sql>
+
+    <select id="selectOperatorList" parameterType="egovframework.eeum.account.web.dto.OperatorSearchRequest"
+            resultMap="operatorResult">
+        SELECT <include refid="operatorColumns"/>
+        <include refid="listJoinWhere"/>
+         ORDER BY U.USER_SN DESC
+         LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <select id="countOperatorList" parameterType="egovframework.eeum.account.web.dto.OperatorSearchRequest"
+            resultType="long">
+        SELECT COUNT(*)
+        <include refid="listJoinWhere"/>
+    </select>
+
+    <!-- 사용자의 활성 보유 역할코드 — SUPER 보호·역할 표시·동시부여 판정에 사용 -->
+    <select id="selectRoleCdsByUserSn" resultType="string">
+        SELECT R.ROLE_CD
+          FROM USER_ROLE UR
+          JOIN ROLE_MST R ON R.ROLE_SN = UR.ROLE_SN AND R.DEL_YN = 'N' AND R.USE_YN = 'Y'
+         WHERE UR.ACTV_USER_SN = #{userSn}
+    </select>
+
+    <select id="selectRoleSnByRoleCd" resultType="java.lang.Long">
+        SELECT ROLE_SN
+          FROM ROLE_MST
+         WHERE ROLE_CD = #{roleCd}
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 역할 부여 — 이미 활성으로 있으면 건너뜀(멱등, 활성유니크 UK_USER_ROLE 충돌 방지). -->
+    <insert id="insertUserRoleIfAbsent">
+        INSERT INTO USER_ROLE (USER_SN, ROLE_SN, REG_DT, MDFCN_DT, RGTR_SN)
+        SELECT #{userSn}, #{roleSn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn}
+          FROM DUAL
+         WHERE NOT EXISTS (
+               SELECT 1 FROM USER_ROLE UR
+                WHERE UR.ACTV_USER_SN = #{userSn}
+                  AND UR.ACTV_ROLE_SN = #{roleSn})
+    </insert>
+
+    <!-- 역할 회수 — 특정 역할코드 활성행 soft delete. 0건이면 보유 안 함. -->
+    <update id="softDeleteUserRoleByRoleCd">
+        UPDATE USER_ROLE UR
+          JOIN ROLE_MST R ON R.ROLE_SN = UR.ROLE_SN AND R.ROLE_CD = #{roleCd} AND R.DEL_YN = 'N'
+           SET UR.DEL_YN = 'Y',
+               UR.MDFCN_DT = UTC_TIMESTAMP(6),
+               UR.MDFR_SN = #{mdfrSn}
+         WHERE UR.ACTV_USER_SN = #{userSn}
+    </update>
+
+    <!-- 가용 SUPERVISOR 전원 USER_SN(행 잠금) — 마지막 SUPERVISOR 보호의 race-safe 기반.
+         FOR UPDATE 로 ACTIVE 수퍼바이저 행집합을 잠가, 서로 다른 두 수퍼바이저 동시 강등/비활성도 직렬화한다. -->
+    <select id="selectActiveSupervisorUserSnsForUpdate" resultType="java.lang.Long">
+        SELECT U.USER_SN
+          FROM USER_ACNT U
+         WHERE U.USER_TYPE_CD = 'OPERATOR'
+           AND U.ACNT_STTS = 'ACTIVE'
+           AND U.DEL_YN = 'N'
+           AND EXISTS (
+               SELECT 1 FROM USER_ROLE UR
+                 JOIN ROLE_MST R ON R.ROLE_SN = UR.ROLE_SN AND R.DEL_YN = 'N' AND R.USE_YN = 'Y'
+                WHERE UR.ACTV_USER_SN = U.USER_SN
+                  AND R.ROLE_CD = 'OPERATOR_SUPERVISOR')
+        FOR UPDATE
+    </select>
+
+    <!-- 계정상태 조건부 전이(운영자 한정) — 0건이면 전이 불가(호출측 처리). -->
+    <update id="updateOperatorSttsIfCurrent">
+        UPDATE USER_ACNT
+           SET ACNT_STTS = #{acntStts},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'OPERATOR'
+           AND ACNT_STTS = #{expectedStts}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 비밀번호 초기화 — ACTIVE/PENDING 운영자를 PENDING+ENPSWD NULL 로 되돌림(옛 비번 즉시 무효).
+         SUSPENDED 는 제외(잠금 우회 금지 — 먼저 활성화 필요). 0건이면 대상 아님. -->
+    <update id="updateOperatorResetToPending">
+        UPDATE USER_ACNT
+           SET ACNT_STTS = 'PENDING',
+               ENPSWD = NULL,
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'OPERATOR'
+           AND ACNT_STTS IN ('ACTIVE', 'PENDING')
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 비밀번호 설정 + 활성화 — 운영자·PENDING·미설정(ENPSWD NULL) 한정. 0건이면 대상 아님. -->
+    <update id="updateOperatorPasswordAndActivate">
+        UPDATE USER_ACNT
+           SET ENPSWD = #{enpswd},
+               ACNT_STTS = 'ACTIVE',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'OPERATOR'
+           AND ACNT_STTS = 'PENDING'
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 운영자 상세(부서/직위) 부분수정 — null 값은 SET 에서 제외(보존). 호출측이 deptNm/jbpsNm 중 하나 이상 있을 때만 호출. -->
+    <update id="updateOperatorDtlInfo">
+        UPDATE OPERATOR_DTL_INFO
+           SET MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+        <if test="deptNm != null"> , DEPT_NM = #{deptNm} </if>
+        <if test="jbpsNm != null"> , JBPS_NM = #{jbpsNm} </if>
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 휴대전화번호 저장/변경 — 암호문(MBL_TELNO, TypeHandler)과 검색해시(MBL_TELNO_HASH)를 같은 UPDATE 로 함께 기록.
+         MBL_TELNO 는 파라미터 typeHandler 로만 암호화(평문 저장 경로 차단). OPERATOR 한정. 0건이면 대상 아님. -->
+    <update id="updateOperatorPhone">
+        UPDATE USER_ACNT
+           SET MBL_TELNO = #{mblTelno,typeHandler=egovframework.eeum.base.crypto.MblTelnoEncryptedTypeHandler},
+               MBL_TELNO_HASH = #{mblTelnoHash},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE USER_SN = #{userSn}
+           AND USER_TYPE_CD = 'OPERATOR'
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

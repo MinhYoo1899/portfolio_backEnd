@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.account.service.account.dao.AccountMapper">
+
+    <!-- 활성유니크 생성컬럼 직접 조회 — UK_USER_ACNT_EML 인덱스 활용 (codex 필수수정 8) -->
+    <select id="existsActiveEmlAddr" resultType="int">
+        SELECT EXISTS (
+            SELECT 1 FROM USER_ACNT
+             WHERE ACTV_EML_ADDR = #{emlAddr}
+        )
+    </select>
+
+    <insert id="insertAccount" parameterType="egovframework.eeum.account.vo.AccountVO"
+            useGeneratedKeys="true" keyProperty="userSn">
+        INSERT INTO USER_ACNT (
+            EML_ADDR, ENPSWD, USER_TYPE_CD, LGN_TYPE, ACNT_STTS, USER_NM, NCNM,
+            MBL_TELNO, MBL_TELNO_HASH,
+            EML_VRFD_YN, EML_VRFD_DT, EML_VRFC_SRC, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{emlAddr}, #{enpswd}, #{userTypeCd}, #{lgnType}, #{acntStts}, #{userNm}, #{ncnm},
+            <!-- 전화번호: 암호문(TypeHandler)·검색해시 함께(운영자 생성 시 세팅, 회원가입은 둘 다 null). crypto-standard §2·§3 -->
+            #{mblTelno,typeHandler=egovframework.eeum.base.crypto.MblTelnoEncryptedTypeHandler}, #{mblTelnoHash},
+            <!-- 일반가입=N(가입 후 코드 발송으로 검증), 소셜=provider email_verified 면 Y/GOOGLE -->
+            <!-- Y(소셜 등 가입 시점 검증)면 검증일시도 함께 기록 — Y인데 EML_VRFD_DT NULL 불일치 방지(codex MUST) -->
+            COALESCE(#{emlVrfdYn}, 'N'),
+            CASE WHEN COALESCE(#{emlVrfdYn}, 'N') = 'Y' THEN UTC_TIMESTAMP(6) ELSE NULL END,
+            #{emlVrfcSrc}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), NULL
+        )
+    </insert>
+
+    <insert id="insertUserDtlInfo">
+        INSERT INTO USER_DTL_INFO (USER_SN, REG_DT, MDFCN_DT, RGTR_SN)
+        VALUES (#{userSn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn})
+    </insert>
+
+    <!-- 현재 프로필 이미지 파일일련번호 조회(행 잠금) — 동시 교체 정합성(FOR UPDATE). 트랜잭션 내에서만 호출. -->
+    <select id="selectPrflImgFileSnForUpdate" resultType="java.lang.Long">
+        SELECT PRFL_IMG_FILE_SN
+          FROM USER_DTL_INFO
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+        FOR UPDATE
+    </select>
+
+    <!-- 프로필 이미지 교체 — 새 파일일련번호로 갱신. -->
+    <!-- 활성 계정에만 프로필 포인터 갱신 — 탈퇴 계정엔 0건이 되도록 USER_ACNT 활성 조건 동반.
+         탈퇴(행잠금 정리)와 프로필 교체가 직렬화돼도, 탈퇴 후 풀린 교체가 탈퇴 계정에 새 파일을 다시 꽂아
+         공개 프로필이 부활하는 경합을 차단(codex 최종 재검증). 0건이면 swap 이 새 파일을 보상 soft delete. -->
+    <update id="updatePrflImgFileSn">
+        UPDATE USER_DTL_INFO
+           SET PRFL_IMG_FILE_SN = #{prflImgFileSn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+           AND EXISTS (SELECT 1 FROM USER_ACNT A WHERE A.USER_SN = #{userSn} AND A.DEL_YN = 'N')
+    </update>
+
+    <!-- 탈퇴 시 프로필 이미지 연결 해제 — PRFL_IMG_FILE_SN 을 NULL 로(공개 다운로드 차단, codex High 1). -->
+    <update id="clearPrflImgFileSn">
+        UPDATE USER_DTL_INFO
+           SET PRFL_IMG_FILE_SN = NULL,
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <insert id="insertTrmsAgre">
+        INSERT INTO TRMS_AGRE_INFO (
+            USER_SN, TRMS_SN, AGRE_YN, AGRE_DT, AGRE_CHNL_CD, CNTN_IP, USER_AGNT, REG_DT
+        ) VALUES (
+            #{userSn}, #{trmsSn}, #{agreYn}, UTC_TIMESTAMP(6), #{agreChnlCd}, #{cntnIp}, #{userAgnt}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 내 동의 현황 — 약관 유형(TRMS_TYPE_CD)별 최신 동의/철회 행 1건(현재 상태). 동의이력 인덱스 IX_TRMS_AGRE_USER_LATEST 활용. -->
+    <select id="selectMyConsents" resultType="egovframework.eeum.account.vo.ConsentStatusVO">
+        SELECT x.trmsSn, x.trmsTypeCd, x.verNo, x.trmsTtl, x.esntlYn, x.agreYn, x.agreDt
+          FROM (
+            SELECT t.TRMS_SN AS trmsSn, t.TRMS_TYPE_CD AS trmsTypeCd, t.VER_NO AS verNo,
+                   t.TRMS_TTL AS trmsTtl, t.ESNTL_YN AS esntlYn, a.AGRE_YN AS agreYn, a.AGRE_DT AS agreDt,
+                   ROW_NUMBER() OVER (PARTITION BY t.TRMS_TYPE_CD ORDER BY a.AGRE_DT DESC, a.TRMS_AGRE_SN DESC) AS rn
+              FROM TRMS_AGRE_INFO a
+              JOIN TRMS_MST t ON t.TRMS_SN = a.TRMS_SN
+             WHERE a.USER_SN = #{userSn}
+          ) x
+         WHERE x.rn = 1
+         ORDER BY x.trmsTypeCd
+    </select>
+
+    <select id="selectRoleSnByRoleCd" resultType="java.lang.Long">
+        SELECT ROLE_SN
+          FROM ROLE_MST
+         WHERE ROLE_CD = #{roleCd}
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+    </select>
+
+    <insert id="insertUserRole">
+        INSERT INTO USER_ROLE (USER_SN, ROLE_SN, REG_DT, MDFCN_DT, RGTR_SN)
+        VALUES (#{userSn}, #{roleSn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn})
+    </insert>
+
+    <!-- 소셜 식별자 → 연결 사용자(활성). UK_USER_SOCIAL_ACNT(활성 PRVDR_CD+PRVDR_USER_ID) 활용 -->
+    <select id="selectUserSnBySocial" resultType="java.lang.Long">
+        SELECT USER_SN
+          FROM USER_SOCIAL_ACNT
+         WHERE PRVDR_CD = #{prvdrCd}
+           AND PRVDR_USER_ID = #{prvdrUserId}
+           AND DEL_YN = 'N'
+    </select>
+
+    <insert id="insertUserSocialAcnt">
+        INSERT INTO USER_SOCIAL_ACNT (
+            USER_SN, PRVDR_CD, PRVDR_USER_ID, EML_ADDR, LNKG_DT, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{userSn}, #{prvdrCd}, #{prvdrUserId}, #{emlAddr}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn}
+        )
+    </insert>
+
+    <!-- 탈퇴 시 소셜연결 해제 — 활성 유니크(PRVDR_CD+PRVDR_USER_ID) 해소로 같은 소셜계정 재가입 가능 -->
+    <update id="softDeleteSocialByUserSn">
+        UPDATE USER_SOCIAL_ACNT
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- ENPSWD 미포함 — 비밀번호 조회는 selectEnpswdByUserSn(본인확인)만 -->
+    <select id="selectAccountByUserSn" resultType="egovframework.eeum.account.vo.AccountVO">
+        SELECT USER_SN, EML_ADDR, USER_TYPE_CD, LGN_TYPE, ACNT_STTS,
+               USER_NM, NCNM, MBL_TELNO_VRFC_YN,
+               EML_VRFD_YN, EML_VRFD_DT, EML_VRFC_SRC, REG_DT
+          FROM USER_ACNT
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <select id="selectEnpswdByUserSn" resultType="string">
+        SELECT ENPSWD
+          FROM USER_ACNT
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 비밀번호 변경 — 활성 계정에만. 0건이면 대상 없음(탈퇴 등). -->
+    <update id="updateEnpswd">
+        UPDATE USER_ACNT
+           SET ENPSWD = #{enpswd},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 이메일검증 완료 — 활성·미검증에만(이미 검증이면 0건, 멱등). 출처는 EMAIL_CODE/GOOGLE 등. -->
+    <update id="updateEmailVerified">
+        UPDATE USER_ACNT
+           SET EML_VRFD_YN = 'Y',
+               EML_VRFD_DT = UTC_TIMESTAMP(6),
+               EML_VRFC_SRC = #{emlVrfcSrc},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+           AND EML_VRFD_YN = 'N'
+           AND ACNT_STTS IN ('ACTIVE', 'PENDING')
+    </update>
+
+    <update id="updateAccount">
+        UPDATE USER_ACNT
+           SET USER_NM = #{userNm},
+               NCNM = #{ncnm},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="withdrawAccount">
+        UPDATE USER_ACNT
+           SET DEL_YN = 'Y',
+               ACNT_STTS = 'WITHDRAWN',
+               WHDWL_DT = UTC_TIMESTAMP(6),
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 현재 상태 조건부 전이 — 0건이면 전이 불가(호출측 롤백) -->
+    <update id="updateAcntSttsIfCurrent">
+        UPDATE USER_ACNT
+           SET ACNT_STTS = #{acntStts},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE USER_SN = #{userSn}
+           AND ACNT_STTS = #{expectedStts}
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

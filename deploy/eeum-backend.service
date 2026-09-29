@@ -1,0 +1,21 @@
+# systemd 서비스 유닛 — 이음 백엔드를 개발서버에서 상시 실행.
+# 설치: sudo cp deploy/eeum-backend.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#       sudo systemctl enable --now eeum-backend
+# 주의: 서버 기본 java 는 21 — 이음은 Java 17 이므로 ExecStart 에 17 경로를 명시한다.
+[Unit]
+Description=Eeum Backend Spring Boot API (dev)
+After=network.target
+
+[Service]
+Type=simple
+User=minho
+WorkingDirectory=/opt/eeum
+EnvironmentFile=/etc/eeum/eeum.env
+# -Duser.timezone=UTC — 타임존 표준(docs/timezone-standard.md). 앱 main의 TimeZone.setDefault와 이중 보장.
+ExecStart=/usr/lib/jvm/jre-17-openjdk/bin/java -Duser.timezone=UTC -jar /opt/eeum/app.jar
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.auth.service.auth.dao.AuthMapper">
+
+    <!-- 인증에 필요한 컬럼만 — ENPSWD 는 인증 매퍼 외 조회 금지 -->
+    <sql id="accountColumns">
+        USER_SN,
+        EML_ADDR,
+        ENPSWD,
+        USER_TYPE_CD,
+        LGN_TYPE,
+        ACNT_STTS,
+        USER_NM,
+        NCNM
+    </sql>
+
+    <!-- 활성유니크 생성컬럼 직접 조회 — UK_USER_ACNT_EML 인덱스 활용 (codex 필수수정 8) -->
+    <select id="selectActiveAccountByEmlAddr" resultType="egovframework.eeum.auth.vo.AuthAccountVO">
+        SELECT <include refid="accountColumns"/>
+          FROM USER_ACNT
+         WHERE ACTV_EML_ADDR = #{emlAddr}
+    </select>
+
+    <select id="selectActiveAccountByUserSn" resultType="egovframework.eeum.auth.vo.AuthAccountVO">
+        SELECT <include refid="accountColumns"/>
+          FROM USER_ACNT
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 데이터 주도 RBAC: 직접 배정 역할의 권한코드 (역할 계층 상속은 추후) -->
+    <select id="selectAuthCdsByUserSn" resultType="string">
+        SELECT DISTINCT A.AUTH_CD
+          FROM USER_ROLE UR
+          JOIN ROLE_MST R       ON R.ROLE_SN = UR.ROLE_SN
+                           AND R.DEL_YN = 'N' AND R.USE_YN = 'Y'
+          JOIN ROLE_AUTH RA ON RA.ROLE_SN = R.ROLE_SN
+                           AND RA.DEL_YN = 'N'
+          JOIN AUTH_MST A       ON A.AUTH_SN = RA.AUTH_SN
+                           AND A.DEL_YN = 'N' AND A.USE_YN = 'Y'
+         WHERE UR.ACTV_USER_SN = #{userSn}
+    </select>
+
+    <update id="updateLastLgnDt">
+        UPDATE USER_ACNT
+           SET LAST_LGN_DT = UTC_TIMESTAMP(6),
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{userSn}
+         WHERE USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <insert id="insertLoginLogInfo" parameterType="egovframework.eeum.auth.vo.LoginLogInfoVO">
+        INSERT INTO LOGIN_LOG_INFO (
+            USER_SN, LGN_ID, LGN_TYPE, PRCS_RSLT, FAIL_RSN, CNTN_IP, USER_AGNT, REG_DT
+        ) VALUES (
+            #{userSn}, #{lgnId}, #{lgnType}, #{prcsRslt}, #{failRsn}, #{cntnIp}, #{userAgnt}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+</mapper>

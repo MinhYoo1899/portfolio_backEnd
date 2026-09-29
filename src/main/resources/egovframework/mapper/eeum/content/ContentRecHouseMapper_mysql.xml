@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.content.service.rechouse.dao.ContentRecHouseMapper">
+
+    <!-- 조회 컬럼(미삭제, HOUSE 조인 표시값 포함) — status 는 저장 안 함(서비스 산출) -->
+    <sql id="recHouseSelect">
+        SELECT R.CONTENT_REC_HOUSE_SN, R.REC_CATEGORY_CD, R.HOUSE_SN, R.SORT_ORDER,
+               R.EXPOSE_BGN_DATE, R.EXPOSE_END_DATE, R.EXPOSE_YN, R.REG_DT,
+               H.HOUSE_NM, H.ADDR AS HOUSE_ADDR
+          FROM CONTENT_REC_HOUSE R
+          LEFT JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), PK 생성키 회수 -->
+    <insert id="insertRecHouse" parameterType="egovframework.eeum.content.vo.ContentRecHouseVO"
+            useGeneratedKeys="true" keyProperty="contentRecHouseSn">
+        INSERT INTO CONTENT_REC_HOUSE
+            (REC_CATEGORY_CD, HOUSE_SN, SORT_ORDER, EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN,
+             REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{recCategoryCd}, #{houseSn}, #{sortOrder}, #{exposeBgnDate}, #{exposeEndDate}, #{exposeYn},
+             UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 미삭제 + 분류필터(선택), 결정적 정렬(SORT_ORDER ASC, SN DESC) -->
+    <select id="selectRecHouseList" resultType="egovframework.eeum.content.vo.ContentRecHouseVO">
+        <include refid="recHouseSelect"/>
+         WHERE R.DEL_YN = 'N'
+        <if test="recCategoryCd != null and recCategoryCd != ''">
+           AND R.REC_CATEGORY_CD = #{recCategoryCd}
+        </if>
+         ORDER BY R.SORT_ORDER ASC, R.CONTENT_REC_HOUSE_SN DESC
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectRecHouseById" resultType="egovframework.eeum.content.vo.ContentRecHouseVO">
+        <include refid="recHouseSelect"/>
+         WHERE R.CONTENT_REC_HOUSE_SN = #{contentRecHouseSn}
+           AND R.DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 수정(미삭제) — SORT_ORDER 미변경(순서저장 별도), MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updateRecHouse" parameterType="egovframework.eeum.content.vo.ContentRecHouseVO">
+        UPDATE CONTENT_REC_HOUSE
+           SET REC_CATEGORY_CD = #{recCategoryCd},
+               HOUSE_SN        = #{houseSn},
+               EXPOSE_BGN_DATE = #{exposeBgnDate},
+               EXPOSE_END_DATE = #{exposeEndDate},
+               EXPOSE_YN       = #{exposeYn},
+               MDFCN_DT        = UTC_TIMESTAMP(6),
+               MDFR_SN         = #{mdfrSn}
+         WHERE CONTENT_REC_HOUSE_SN = #{contentRecHouseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 노출 토글(미삭제) -->
+    <update id="updateRecHouseExposeYn">
+        UPDATE CONTENT_REC_HOUSE
+           SET EXPOSE_YN = #{exposeYn},
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{mdfrSn}
+         WHERE CONTENT_REC_HOUSE_SN = #{contentRecHouseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 순서 저장(미삭제) — SORT_ORDER 만 갱신 -->
+    <update id="updateRecHouseSortOrder">
+        UPDATE CONTENT_REC_HOUSE
+           SET SORT_ORDER = #{sortOrder},
+               MDFCN_DT   = UTC_TIMESTAMP(6),
+               MDFR_SN    = #{mdfrSn}
+         WHERE CONTENT_REC_HOUSE_SN = #{contentRecHouseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeleteRecHouse">
+        UPDATE CONTENT_REC_HOUSE
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE CONTENT_REC_HOUSE_SN = #{contentRecHouseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- houseId 검증 — 존재+미삭제 고택 수(0=없음) -->
+    <select id="selectActiveHouseExists" resultType="int">
+        SELECT COUNT(1)
+          FROM HOUSE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+</mapper>

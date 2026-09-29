@@ -1,0 +1,139 @@
+-- =============================================================================
+-- V34 : 편의시설 카탈로그 한옥 재정비 — 카테고리 재정의(5분류) + 한옥 시설 정리 seed + 커스텀/적용범위 확장
+-- 배경: AMENITY_MST 스타터 11개(주차/인터넷/미디어/시설/기타)는 일반 숙소 시설이라 한옥 퍼블 스펙(~46)을 못 담음.
+--   결정(사용자+codex 교차검토): 모델1 AMENITY_MST 유지. 항목은 정리 후 seed.
+--   ※ 코드성 속성 중 "카테고리"만 COMM_CD(AMENITY_CTGRY). "적용범위/커스텀"은 값이 작고 고정이라 CHECK enum으로 둠.
+-- 분류 5종(사용자 확정 2026-06-29, 퍼블/PDF·codex 권고 — AMENITY_CTGRY는 API/Java 계약이 아니라 화면 표시용 코드 데이터라 퍼블 그룹에 정렬):
+--   객실편의시설(ROOM_FEATURE) / 전자제품(ELECTRONICS) / 욕실용품(BATHROOM) / 외부시설(OUTDOOR) / 특수시설(SPECIAL).
+--   ※ 분류(category)와 적용범위(APPLY_SCOPE HOUSE/ROOM/BOTH)는 별개 축. 예: 테라스=외부시설(분류)이지만 scope=ROOM.
+-- 이 마이그레이션이 하는 것:
+--   1) AMENITY_MST 컬럼 추가(APPLY_SCOPE_CD/CUSTOM_YN/REQUEST_USER_SN/AMENITY_KEY). 승인 게이트 없음(운영자 중심, 누구나 생성/수정).
+--   2) COMM_CD AMENITY_CTGRY 5종 정의(+ 구 FOOD_BEVERAGE/legacy 5종 비활성).
+--   3) 기존 11개 항목을 새 5분류로 이관(+scope/key).
+--   4) (안전) 이관 누락 잔여 활성항목을 ROOM_FEATURE로 흡수 → 그 다음 legacy 카테고리 비활성.
+--   5) 한옥 특화 항목 정리 seed(5분류 배치 — codex 권고안).
+-- 냉난방 주의: 온돌/난방/에어컨 등은 "편의시설"이 아니라 별도 도메인(ROOM_CLIM_FCLTY, COMM_CD COOLING_TYPE/HEATING_TYPE)에서 관리. 카탈로그 제외.
+-- 커스텀(직접입력) 흐름(★서비스 슬라이스 구현): 운영자/파트너 입력 → CUSTOM_YN='Y'+요청자로 생성, 즉시 활성 카탈로그 항목이 되어 상품에 매핑.
+--   - 승인 게이트 없음. 직접입력은 PENDING 없이 바로 USE_YN='Y'. 동일 활성명 동시요청 → UK 위반 가능 → 서비스가 insert-or-get(ON DUPLICATE KEY)으로 기존 row 재매핑.
+--   - HOUSE/ROOM 매핑은 같은 AMENITY_SN 참조 → DB가 scope 위반을 못 막음. 서비스가 HOUSE↔(HOUSE|BOTH), ROOM↔(ROOM|BOTH)만 허용 검증.
+-- 멱등성/롤포워드(★codex 치명 반영): 운영DB에 운영자가 동일 이름 항목을 이미 추가했을 수 있어 plain INSERT는 활성이름 유니크에 걸려 Flyway가 멈출 수 있음.
+--   → (a) 명개명(바비큐→바비큐/그릴)은 대상명 미존재 시에만, (b) seed INSERT는 ON DUPLICATE KEY UPDATE(있으면 canonical 갱신, 없으면 삽입)로 처리.
+-- 타임존: UTC_TIMESTAMP(6). insert 시 MDFCN_DT=REG_DT(규칙).
+-- =============================================================================
+
+-- ── 1) AMENITY_MST 컬럼 추가 ─────────────────────────────────────────────────
+ALTER TABLE AMENITY_MST
+    ADD COLUMN APPLY_SCOPE_CD   VARCHAR(10) NOT NULL DEFAULT 'ROOM'
+        COMMENT '적용범위(HOUSE/ROOM/BOTH) — 공용시설은 HOUSE, 객실 설비는 ROOM. 매핑 검증은 서비스 책임' AFTER AMENITY_CTGRY_CD,
+    ADD COLUMN AMENITY_KEY      VARCHAR(60) NULL
+        COMMENT '안정 문자열 키(seed 멱등성/아이콘/다국어/테스트 참조용. 커스텀은 NULL)' AFTER AMENITY_NM,
+    ADD COLUMN CUSTOM_YN        CHAR(1)     NOT NULL DEFAULT 'N'
+        COMMENT '커스텀(운영자/파트너 직접입력) 여부(Y/N)' AFTER ICON_KEY,
+    ADD COLUMN REQUEST_USER_SN  BIGINT      NULL  COMMENT '커스텀 직접입력 최초 요청자(사용자일련번호) — 감사용' AFTER CUSTOM_YN,
+    ADD CONSTRAINT CK_AMENITY_SCOPE   CHECK (APPLY_SCOPE_CD IN ('HOUSE','ROOM','BOTH')),
+    ADD CONSTRAINT CK_AMENITY_CUSTOM  CHECK (CUSTOM_YN IN ('Y','N')),
+    ADD CONSTRAINT CK_AMENITY_KEY_FMT CHECK (AMENITY_KEY IS NULL OR CHAR_LENGTH(TRIM(AMENITY_KEY)) > 0),
+    ADD UNIQUE KEY UK_AMENITY_KEY (AMENITY_KEY),
+    ADD KEY IX_AMENITY_SCOPE (USE_YN, DEL_YN, APPLY_SCOPE_CD, AMENITY_CTGRY_CD, SORT_SEQ);
+
+-- ── 2) COMM_CD AMENITY_CTGRY 5종(퍼블 표시그룹과 일치) ────────────────────────
+-- 롤포워드: 동일 코드 기존 존재 시 멈추지 않고 갱신(ON DUPLICATE KEY — PK (GROUP_CD,CD)). dev의 구 ROOM_FEATURE/BATHROOM 라벨도 여기서 정정됨.
+INSERT INTO COMM_CD (GROUP_CD, CD, CD_NM, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT) VALUES
+    ('AMENITY_CTGRY', 'ROOM_FEATURE', '객실편의시설', 1, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+    ('AMENITY_CTGRY', 'ELECTRONICS',  '전자제품',     2, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+    ('AMENITY_CTGRY', 'BATHROOM',     '욕실용품',     3, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+    ('AMENITY_CTGRY', 'OUTDOOR',      '외부시설',     4, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+    ('AMENITY_CTGRY', 'SPECIAL',      '특수시설',     5, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE CD_NM=VALUES(CD_NM), SORT_SEQ=VALUES(SORT_SEQ), USE_YN=VALUES(USE_YN), MDFCN_DT=UTC_TIMESTAMP(6);
+-- 구 FOOD_BEVERAGE는 5분류에 없음 → 비활성(과거 표기 보존, 물리삭제 X). 존재하지 않으면 no-op.
+UPDATE COMM_CD SET USE_YN='N', MDFCN_DT=UTC_TIMESTAMP(6)
+ WHERE GROUP_CD='AMENITY_CTGRY' AND CD='FOOD_BEVERAGE';
+
+-- ── 3) 기존 11개 항목 이관(새 5분류 + scope + key). 모든 UPDATE는 활성행(DEL_YN='N')만 ────
+-- 바비큐+그릴은 1개로 통합 — 기존 '바비큐' 행을 '바비큐/그릴'로 개명, 그릴 seed 미삽입.
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ELECTRONICS',  APPLY_SCOPE_CD='BOTH',  AMENITY_KEY='FREE_WIFI',    SORT_SEQ=1, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='무료 와이파이' AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ELECTRONICS',  APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='TV',           SORT_SEQ=2, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='TV'          AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ELECTRONICS',  APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='NETFLIX',      SORT_SEQ=3, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='넷플릭스'      AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ELECTRONICS',  APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='DISNEY_PLUS',  SORT_SEQ=4, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='디즈니플러스'  AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ELECTRONICS',  APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='FRIDGE',       SORT_SEQ=5, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='냉장고'       AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ROOM_FEATURE', APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='NO_SMOKING',   SORT_SEQ=1, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='금연'         AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ROOM_FEATURE', APPLY_SCOPE_CD='BOTH',  AMENITY_KEY='PET_FRIENDLY', SORT_SEQ=2, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='반려동물 동반' AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ROOM_FEATURE', APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='COOKING',      SORT_SEQ=6, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='취사가능'     AND DEL_YN='N';
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='OUTDOOR',      APPLY_SCOPE_CD='HOUSE', AMENITY_KEY='FREE_PARKING', SORT_SEQ=1, MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='무료주차'      AND DEL_YN='N';
+-- 바비큐→바비큐/그릴 개명: 대상명이 이미 활성으로 있으면 활성이름 유니크 충돌 → 미존재 시에만 개명(롤포워드 안전).
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='OUTDOOR',      APPLY_SCOPE_CD='BOTH',  AMENITY_NM='바비큐/그릴', AMENITY_KEY='BBQ', SORT_SEQ=6, MDFCN_DT=UTC_TIMESTAMP(6)
+ WHERE AMENITY_NM='바비큐' AND DEL_YN='N'
+   AND NOT EXISTS (SELECT 1 FROM (SELECT 1 FROM AMENITY_MST WHERE AMENITY_NM='바비큐/그릴' AND DEL_YN='N') x);
+-- 에어컨: V33에서 USE_YN='N'(냉난방 일원화). 활성행만 카테고리 정리, USE_YN='N' 유지, 신규 seed 미포함.
+UPDATE AMENITY_MST SET AMENITY_CTGRY_CD='ROOM_FEATURE', APPLY_SCOPE_CD='ROOM',  AMENITY_KEY='AIRCON_DEPRECATED', MDFCN_DT=UTC_TIMESTAMP(6) WHERE AMENITY_NM='에어컨' AND DEL_YN='N';
+
+-- ── 4) (안전) 이관 누락 잔여 활성항목 흡수 → 그 다음 legacy 카테고리 비활성 ──────────────
+-- 명시 이관 못 한(실DB 추가 존재 가능) 활성 항목이 legacy 카테고리에 남아 화면에서 사라지는 것 방지.
+UPDATE AMENITY_MST
+   SET AMENITY_CTGRY_CD='ROOM_FEATURE', MDFCN_DT=UTC_TIMESTAMP(6)
+ WHERE AMENITY_CTGRY_CD IN ('PARKING','INTERNET','MEDIA','FACILITY','ETC')
+   AND DEL_YN='N';
+-- legacy 카테고리 비활성(물리삭제 X — 과거 표기 보존). 신규 5분류와 코드 충돌 없음(재사용 금지).
+UPDATE COMM_CD
+   SET USE_YN='N', MDFCN_DT=UTC_TIMESTAMP(6)
+ WHERE GROUP_CD='AMENITY_CTGRY'
+   AND CD IN ('PARKING','INTERNET','MEDIA','FACILITY','ETC');
+
+-- ── 5) 한옥 특화 항목 정리 seed(5분류 배치 — codex 권고안) ──────────────────────
+-- 이관(UPDATE)된 11개는 여기서 제외. 신규 36개만 INSERT. 롤포워드: 동일 활성명/키 존재 시 canonical 갱신(ON DUPLICATE KEY).
+-- [전자제품] ELECTRONICS (이관분: 무료와이파이/TV/넷플릭스/디즈니플러스/냉장고 — 여기서 제외)
+INSERT INTO AMENITY_MST (AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, AMENITY_KEY, ICON_KEY, CUSTOM_YN, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT) VALUES
+    ('ELECTRONICS','ROOM','전기포트',   'KETTLE',         'kettle',     'N', 6,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ELECTRONICS','BOTH','정수기',     'WATER_PURIFIER', 'purifier',   'N', 7,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ELECTRONICS','ROOM','캡슐 커피',  'CAPSULE_COFFEE', 'coffee',     'N', 8,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ELECTRONICS','ROOM','인덕션',     'INDUCTION',      'induction',  'N', 9,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ELECTRONICS','ROOM','전자레인지', 'MICROWAVE',      'microwave',  'N',10,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ELECTRONICS','ROOM','토스터',     'TOASTER',        'toaster',    'N',11,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE AMENITY_CTGRY_CD=VALUES(AMENITY_CTGRY_CD), APPLY_SCOPE_CD=VALUES(APPLY_SCOPE_CD),
+    AMENITY_KEY=VALUES(AMENITY_KEY), ICON_KEY=VALUES(ICON_KEY), CUSTOM_YN=VALUES(CUSTOM_YN), SORT_SEQ=VALUES(SORT_SEQ), USE_YN=VALUES(USE_YN), MDFCN_DT=UTC_TIMESTAMP(6);
+-- [객실편의시설] ROOM_FEATURE (이관분: 금연/반려동물동반/취사가능 — 여기서 제외)
+INSERT INTO AMENITY_MST (AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, AMENITY_KEY, ICON_KEY, CUSTOM_YN, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT) VALUES
+    ('ROOM_FEATURE','ROOM','무료 생수',  'FREE_WATER',   'water',      'N', 3,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ROOM_FEATURE','BOTH','조식 제공',  'BREAKFAST',    'breakfast',  'N', 4,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ROOM_FEATURE','ROOM','미니 바',    'MINIBAR',      'minibar',    'N', 5,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ROOM_FEATURE','ROOM','식기류',     'TABLEWARE',    'tableware',  'N', 7,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ROOM_FEATURE','ROOM','와인잔',     'WINE_GLASS',   'wine_glass', 'N', 8,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ROOM_FEATURE','ROOM','다과',       'REFRESHMENTS', 'snack',      'N', 9,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('ROOM_FEATURE','ROOM','좌식 테이블','FLOOR_TABLE',  'floor_table','N',10,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE AMENITY_CTGRY_CD=VALUES(AMENITY_CTGRY_CD), APPLY_SCOPE_CD=VALUES(APPLY_SCOPE_CD),
+    AMENITY_KEY=VALUES(AMENITY_KEY), ICON_KEY=VALUES(ICON_KEY), CUSTOM_YN=VALUES(CUSTOM_YN), SORT_SEQ=VALUES(SORT_SEQ), USE_YN=VALUES(USE_YN), MDFCN_DT=UTC_TIMESTAMP(6);
+-- [욕실용품] BATHROOM (전부 신규)
+INSERT INTO AMENITY_MST (AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, AMENITY_KEY, ICON_KEY, CUSTOM_YN, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT) VALUES
+    ('BATHROOM','ROOM','샤워',       'SHOWER',          'shower',     'N', 1,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','개별 욕실',  'PRIVATE_BATHROOM','bathroom',   'N', 2,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','헤어드라이어','HAIR_DRYER',     'hair_dryer', 'N', 3,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','타월',       'TOWEL',           'towel',      'N', 4,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','비데',       'BIDET',           'bidet',      'N', 5,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','욕조',       'BATHTUB',         'bathtub',    'N', 6,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','샴푸',       'SHAMPOO',         'shampoo',    'N', 7,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','바디워시',   'BODY_WASH',       'body_wash',  'N', 8,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','치약·칫솔',  'TOOTHBRUSH',      'toothbrush', 'N', 9,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','면도기',     'RAZOR',           'razor',      'N',10,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','샤워가운',   'BATHROBE',        'bathrobe',   'N',11,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('BATHROOM','ROOM','슬리퍼',     'SLIPPERS',        'slippers',   'N',12,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE AMENITY_CTGRY_CD=VALUES(AMENITY_CTGRY_CD), APPLY_SCOPE_CD=VALUES(APPLY_SCOPE_CD),
+    AMENITY_KEY=VALUES(AMENITY_KEY), ICON_KEY=VALUES(ICON_KEY), CUSTOM_YN=VALUES(CUSTOM_YN), SORT_SEQ=VALUES(SORT_SEQ), USE_YN=VALUES(USE_YN), MDFCN_DT=UTC_TIMESTAMP(6);
+-- [외부시설] OUTDOOR (이관분: 무료주차/바비큐그릴 — 여기서 제외)
+INSERT INTO AMENITY_MST (AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, AMENITY_KEY, ICON_KEY, CUSTOM_YN, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT) VALUES
+    ('OUTDOOR','HOUSE','마당',      'YARD',          'yard',       'N', 2,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('OUTDOOR','HOUSE','전용 정원', 'PRIVATE_GARDEN','garden',     'N', 3,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('OUTDOOR','HOUSE','평상',      'PYEONGSANG',    'pyeongsang', 'N', 4,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('OUTDOOR','ROOM', '테라스',    'TERRACE',       'terrace',    'N', 5,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE AMENITY_CTGRY_CD=VALUES(AMENITY_CTGRY_CD), APPLY_SCOPE_CD=VALUES(APPLY_SCOPE_CD),
+    AMENITY_KEY=VALUES(AMENITY_KEY), ICON_KEY=VALUES(ICON_KEY), CUSTOM_YN=VALUES(CUSTOM_YN), SORT_SEQ=VALUES(SORT_SEQ), USE_YN=VALUES(USE_YN), MDFCN_DT=UTC_TIMESTAMP(6);
+-- [특수시설] SPECIAL (한옥 특화/구조/전망/체험 — 전부 신규)
+INSERT INTO AMENITY_MST (AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, AMENITY_KEY, ICON_KEY, CUSTOM_YN, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT) VALUES
+    ('SPECIAL','BOTH','다도 공간', 'TEA_SPACE',     'tea',           'N', 1,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('SPECIAL','ROOM','누마루',    'NUMARU',        'numaru',        'N', 2,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('SPECIAL','ROOM','마루',      'MARU',          'maru',          'N', 3,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('SPECIAL','ROOM','복층',      'DUPLEX',        'duplex',        'N', 4,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('SPECIAL','BOTH','한복 체험', 'HANBOK',        'hanbok',        'N', 5,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('SPECIAL','ROOM','마운틴뷰',  'MOUNTAIN_VIEW', 'mountain_view', 'N', 6,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+    ('SPECIAL','ROOM','리버뷰',    'RIVER_VIEW',    'river_view',    'N', 7,'Y',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE AMENITY_CTGRY_CD=VALUES(AMENITY_CTGRY_CD), APPLY_SCOPE_CD=VALUES(APPLY_SCOPE_CD),
+    AMENITY_KEY=VALUES(AMENITY_KEY), ICON_KEY=VALUES(ICON_KEY), CUSTOM_YN=VALUES(CUSTOM_YN), SORT_SEQ=VALUES(SORT_SEQ), USE_YN=VALUES(USE_YN), MDFCN_DT=UTC_TIMESTAMP(6);

@@ -1,0 +1,40 @@
+# Dependabot — 의존성/액션 취약점·신버전 자동 감지 (GitHub 내장, 무료).
+# 취약점이 공개되면 "고친 버전으로 올리는 PR"을 자동 생성하고, 주기적으로 신버전도 PR 로 제안한다.
+# PR 워크플로우가 없어도(혼자 작업·develop 직접 push) Dependabot 이 직접 PR 을 만들어 주므로 동작한다.
+version: 2
+updates:
+  # ① Maven 의존성(pom.xml) — 라이브러리 취약점·신버전
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 5
+    # 자동 생성되는 기본 라벨만 사용(미리 만들지 않은 커스텀 라벨은 무시됨 — codex 권고).
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # eGov 부모 pom 이 버전을 결정하는 항목이 많아, 한 번에 몰리지 않도록 minor/patch 를 묶어 PR 수를 줄인다.
+    groups:
+      maven-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ② GitHub Actions — 워크플로우가 쓰는 액션(SHA 고정)의 신버전. Dependabot 이 SHA 와 버전 주석을 함께 갱신한다.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(ci)"

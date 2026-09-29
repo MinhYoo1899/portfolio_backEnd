@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.terms.service.terms.dao.TermsMapper">
+
+    <!-- 시행 중 약관 — 유형당 최신 시행버전 1건(본문 미포함). MySQL8 윈도우함수로 PARTITION 최신 1건만. -->
+    <select id="selectEffectiveTerms" resultType="egovframework.eeum.terms.vo.TrmsVO">
+        SELECT TRMS_SN, TRMS_TYPE_CD, VER_NO, TRMS_TTL, ESNTL_YN
+          FROM (SELECT t.*, ROW_NUMBER() OVER (PARTITION BY TRMS_TYPE_CD ORDER BY ENFC_DT DESC, VER_NO DESC, TRMS_SN DESC) rn
+                  FROM TRMS_MST t
+                 WHERE USE_YN = 'Y' AND DEL_YN = 'N' AND ENFC_DT &lt;= UTC_TIMESTAMP(6)) x
+         WHERE rn = 1
+         ORDER BY TRMS_TYPE_CD, VER_NO
+    </select>
+
+    <!-- 시행 중 약관 상세 — 본문 포함. 시행중·사용중·미삭제만(없으면 null). -->
+    <select id="selectEffectiveTermsDetail" resultType="egovframework.eeum.terms.vo.TrmsVO">
+        SELECT TRMS_SN, TRMS_TYPE_CD, VER_NO, TRMS_TTL, ESNTL_YN, TRMS_CN
+          FROM TRMS_MST
+         WHERE TRMS_SN = #{trmsSn}
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+           AND ENFC_DT &lt;= UTC_TIMESTAMP(6)
+    </select>
+
+</mapper>

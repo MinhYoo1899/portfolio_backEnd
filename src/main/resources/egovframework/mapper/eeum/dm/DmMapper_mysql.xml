@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.dm.service.dm.dao.DmMapper">
+
+    <!-- 조회 컬럼(미삭제) -->
+    <sql id="dmColumns">
+        DM_MESSAGE_SN, TITLE, CONTENT, CHANNEL_CD, IMG_URL, TARGET_TYPE_CD, TARGET_CNT,
+        SEND_TIMING_CD, SCHEDULED_AT, SENT_AT, DM_STTS_CD, FAIL_RSN, REG_DT
+    </sql>
+
+    <!-- 목록 공용 필터(미삭제 + 상태/채널/제목) -->
+    <sql id="dmListWhere">
+        WHERE DEL_YN = 'N'
+        <if test="status != null and status != ''">       AND DM_STTS_CD = #{status} </if>
+        <if test="channelCd != null and channelCd != ''"> AND CHANNEL_CD = #{channelCd} </if>
+        <if test="keyword != null and keyword != ''">     AND TITLE LIKE CONCAT('%', #{keyword}, '%') </if>
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), PK 생성키 회수 -->
+    <insert id="insertDm" parameterType="egovframework.eeum.dm.vo.DmMessageVO"
+            useGeneratedKeys="true" keyProperty="dmMessageSn">
+        INSERT INTO DM_MESSAGE
+            (TITLE, CONTENT, CHANNEL_CD, IMG_URL, TARGET_TYPE_CD, TARGET_CNT, SEND_TIMING_CD,
+             SCHEDULED_AT, SENT_AT, DM_STTS_CD, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{title}, #{content}, #{channelCd}, #{imgUrl}, #{targetTypeCd}, #{targetCnt}, #{sendTimingCd},
+             #{scheduledAt}, #{sentAt}, #{dmSttsCd}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 미삭제 + 필터 + 오프셋 페이지네이션, 결정적 정렬(SN DESC) -->
+    <select id="selectDmList" resultType="egovframework.eeum.dm.vo.DmMessageVO">
+        SELECT <include refid="dmColumns"/>
+          FROM DM_MESSAGE
+        <include refid="dmListWhere"/>
+         ORDER BY DM_MESSAGE_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 목록 총건수(동일 필터) -->
+    <select id="countDm" resultType="long">
+        SELECT COUNT(*)
+          FROM DM_MESSAGE
+        <include refid="dmListWhere"/>
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectDmById" resultType="egovframework.eeum.dm.vo.DmMessageVO">
+        SELECT <include refid="dmColumns"/>
+          FROM DM_MESSAGE
+         WHERE DM_MESSAGE_SN = #{dmMessageSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeleteDm">
+        UPDATE DM_MESSAGE
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE DM_MESSAGE_SN = #{dmMessageSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 예약 DM 자동발송(cron) — SCHEDULED 중 예약시각 도래분을 SENT+발송일 로(스텁 발송) -->
+    <update id="promoteScheduled">
+        UPDATE DM_MESSAGE
+           SET DM_STTS_CD = 'SENT',
+               SENT_AT    = UTC_TIMESTAMP(6),
+               MDFCN_DT   = UTC_TIMESTAMP(6)
+         WHERE DM_STTS_CD = 'SCHEDULED'
+           AND SCHEDULED_AT IS NOT NULL
+           AND SCHEDULED_AT &lt;= UTC_TIMESTAMP(6)
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.room.dao.RoomMapper">
+
+    <insert id="insertRoom" parameterType="egovframework.eeum.house.vo.RoomVO"
+            useGeneratedKeys="true" keyProperty="roomSn">
+        INSERT INTO ROOM (
+            HOUSE_SN, ROOM_NM, BSC_PRSN_CNT, MAX_PRSN_CNT, DFLT_STOCK_QTY, MIN_STAY_NGT_CNT,
+            ROOM_DC, AREA_SQM, ROOM_CNT, BATHRM_CNT, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{houseSn}, #{roomNm}, #{bscPrsnCnt}, #{maxPrsnCnt}, #{dfltStockQty}, #{minStayNgtCnt},
+            #{roomDc}, #{areaSqm}, #{roomCnt}, #{bathrmCnt}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+        <!-- ROOM_STTS_CD='DRAFT', DEL_YN='N' 은 DB 기본값 -->
+    </insert>
+
+    <select id="selectRoomDetail" resultType="egovframework.eeum.house.vo.RoomVO">
+        SELECT R.ROOM_SN, R.HOUSE_SN, R.ROOM_NM, R.ROOM_STTS_CD, R.BSC_PRSN_CNT, R.MAX_PRSN_CNT,
+               R.DFLT_STOCK_QTY, R.MIN_STAY_NGT_CNT, R.ROOM_DC,
+               R.AREA_SQM, R.ROOM_CNT, R.BATHRM_CNT, R.REG_DT, R.MDFCN_DT,
+               H.PRTNR_SN AS OWNER_PRTNR_SN
+          FROM ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN
+                      AND H.DEL_YN = 'N'
+         WHERE R.ROOM_SN = #{roomSn}
+           AND R.DEL_YN = 'N'
+    </select>
+
+    <!-- 부모 고택 일련번호 선확보(미잠금) — 락 순서 HOUSE→ROOM 통일용 -->
+    <select id="selectHouseSnByRoom" resultType="long">
+        SELECT HOUSE_SN
+          FROM ROOM
+         WHERE ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- ROOM 단일 행 잠금. 소유권은 서비스가 부모 고택을 먼저 FOR UPDATE 로 검증(데드락 방지) -->
+    <select id="selectRoomForUpdate" resultType="egovframework.eeum.house.vo.RoomVO">
+        SELECT ROOM_SN, HOUSE_SN, ROOM_STTS_CD, DEL_YN
+          FROM ROOM
+         WHERE ROOM_SN = #{roomSn}
+         FOR UPDATE
+    </select>
+
+    <select id="selectRoomsByHouse" resultType="egovframework.eeum.house.vo.RoomVO">
+        SELECT R.ROOM_SN, R.HOUSE_SN, R.ROOM_NM, R.ROOM_STTS_CD, R.BSC_PRSN_CNT, R.MAX_PRSN_CNT,
+               R.DFLT_STOCK_QTY, R.MIN_STAY_NGT_CNT, R.ROOM_DC,
+               R.AREA_SQM, R.ROOM_CNT, R.BATHRM_CNT, R.REG_DT, R.MDFCN_DT
+          FROM ROOM R
+         WHERE R.HOUSE_SN = #{houseSn}
+           AND R.DEL_YN = 'N'
+         ORDER BY R.ROOM_SN DESC
+    </select>
+
+    <!-- 수정 — 부모 고택이 본인 소유(JOIN H.PRTNR_SN) + 활성일 때만(SQL 2중 방어) -->
+    <update id="updateRoom">
+        UPDATE ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET R.ROOM_NM = #{roomNm},
+               R.BSC_PRSN_CNT = #{bscPrsnCnt},
+               R.MAX_PRSN_CNT = #{maxPrsnCnt},
+               R.DFLT_STOCK_QTY = #{dfltStockQty},
+               R.MIN_STAY_NGT_CNT = #{minStayNgtCnt},
+               R.ROOM_DC = #{roomDc},
+               R.AREA_SQM = #{areaSqm},
+               R.ROOM_CNT = #{roomCnt},
+               R.BATHRM_CNT = #{bathrmCnt},
+               R.MDFCN_DT = UTC_TIMESTAMP(6),
+               R.MDFR_SN = #{mdfrSn}
+         WHERE R.ROOM_SN = #{roomSn}
+           AND R.DEL_YN = 'N'
+    </update>
+
+    <!-- 상태변경 — 본인 소유 + 미삭제 + SUSPENDED 아님(판매자 자가복구 차단) -->
+    <update id="updateRoomStatus">
+        UPDATE ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET R.ROOM_STTS_CD = #{roomSttsCd},
+               R.MDFCN_DT = UTC_TIMESTAMP(6),
+               R.MDFR_SN = #{mdfrSn}
+         WHERE R.ROOM_SN = #{roomSn}
+           AND R.DEL_YN = 'N'
+           AND R.ROOM_STTS_CD &lt;&gt; 'SUSPENDED'
+    </update>
+
+    <update id="softDeleteRoom">
+        UPDATE ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET R.DEL_YN = 'Y',
+               R.MDFCN_DT = UTC_TIMESTAMP(6),
+               R.MDFR_SN = #{mdfrSn}
+         WHERE R.ROOM_SN = #{roomSn}
+           AND R.DEL_YN = 'N'
+    </update>
+
+    <!-- 고택 삭제 동반 — 부모 고택이 본인 소유(JOIN H.PRTNR_SN) + 활성일 때만. 고택 soft delete 前 호출(H.DEL_YN='N') -->
+    <update id="softDeleteRoomsByHouse">
+        UPDATE ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET R.DEL_YN = 'Y',
+               R.MDFCN_DT = UTC_TIMESTAMP(6),
+               R.MDFR_SN = #{mdfrSn}
+         WHERE R.HOUSE_SN = #{houseSn}
+           AND R.DEL_YN = 'N'
+    </update>
+
+</mapper>

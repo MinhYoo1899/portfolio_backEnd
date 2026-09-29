@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.room.dao.RoomAmenityMapper">
+
+    <!-- 표출용 — 매핑 활성 + 카탈로그 활성(USE_YN='Y') 항목만. 그 객실의 커스텀도 USE_YN='Y'라 표시됨 -->
+    <select id="selectActiveAmenitiesByRoom" resultType="egovframework.eeum.house.vo.AmenityVO">
+        SELECT A.AMENITY_SN, A.AMENITY_CTGRY_CD, A.APPLY_SCOPE_CD, A.AMENITY_NM, A.AMENITY_KEY,
+               A.ICON_KEY, A.SORT_SEQ, A.USE_YN, A.CUSTOM_YN
+          FROM ROOM_AMENITY RA
+          JOIN AMENITY_MST A ON A.AMENITY_SN = RA.AMENITY_SN
+                            AND A.DEL_YN = 'N'
+                            AND A.USE_YN = 'Y'
+                            AND A.APPLY_SCOPE_CD IN ('ROOM','BOTH')  <!-- 저장 검증과 정합: 객실에 못 붙는 scope(고택전용)는 표출/재전송 대상에서 제외(codex 치명) -->
+         WHERE RA.ROOM_SN = #{roomSn}
+           AND RA.DEL_YN = 'N'
+         ORDER BY A.AMENITY_CTGRY_CD, A.SORT_SEQ, A.AMENITY_SN
+    </select>
+
+    <!-- 현재 활성 매핑 SN 집합 — 마스터가 삭제(반려 포함)된 항목은 제외(stale current 방지, codex) -->
+    <select id="selectActiveAmenitySnsByRoom" resultType="long">
+        SELECT RA.AMENITY_SN
+          FROM ROOM_AMENITY RA
+          JOIN AMENITY_MST A ON A.AMENITY_SN = RA.AMENITY_SN AND A.DEL_YN = 'N'
+         WHERE RA.ROOM_SN = #{roomSn}
+           AND RA.DEL_YN = 'N'
+    </select>
+
+    <insert id="insertRoomAmenity">
+        INSERT INTO ROOM_AMENITY (
+            ROOM_SN, AMENITY_SN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{roomSn}, #{amenitySn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+    </insert>
+
+    <!-- 보존 집합(keepIds)에 없는 활성 매핑 해제 — ROOM JOIN HOUSE + prtnrSn 가드. keepIds 비면 전부 해제 -->
+    <update id="softDeleteRoomAmenitiesNotIn">
+        UPDATE ROOM_AMENITY RA
+          JOIN ROOM R  ON R.ROOM_SN = RA.ROOM_SN AND R.DEL_YN = 'N'
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET RA.DEL_YN = 'Y',
+               RA.MDFCN_DT = UTC_TIMESTAMP(6),
+               RA.MDFR_SN = #{mdfrSn}
+         WHERE RA.ROOM_SN = #{roomSn}
+           AND RA.DEL_YN = 'N'
+        <if test="keepIds != null and keepIds.size() > 0">
+           AND RA.AMENITY_SN NOT IN
+            <foreach collection="keepIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        </if>
+    </update>
+
+</mapper>

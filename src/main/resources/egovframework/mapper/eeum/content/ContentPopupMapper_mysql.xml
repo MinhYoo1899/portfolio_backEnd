@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.content.service.popup.dao.ContentPopupMapper">
+
+    <!-- 조회 컬럼(미삭제만 조회) — status 는 저장 안 함(서비스 산출) -->
+    <sql id="popupColumns">
+        CONTENT_POPUP_SN, IMG_URL, TITLE, EXPOSE_LOCATION_CD, EXPOSE_TARGET_CD,
+        LINK_TARGET_CD, LINK_TARGET_VAL, EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), PK 생성키 회수 -->
+    <insert id="insertPopup" parameterType="egovframework.eeum.content.vo.ContentPopupVO"
+            useGeneratedKeys="true" keyProperty="contentPopupSn">
+        INSERT INTO CONTENT_POPUP
+            (IMG_URL, TITLE, EXPOSE_LOCATION_CD, EXPOSE_TARGET_CD, LINK_TARGET_CD, LINK_TARGET_VAL,
+             EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{imgUrl}, #{title}, #{exposeLocationCd}, #{exposeTargetCd}, #{linkTargetCd}, #{linkTargetVal},
+             #{exposeBgnDate}, #{exposeEndDate}, #{exposeYn}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 미삭제 + 노출위치/제목 필터(선택), 결정적 정렬(SN DESC) -->
+    <select id="selectPopupList" resultType="egovframework.eeum.content.vo.ContentPopupVO">
+        SELECT <include refid="popupColumns"/>
+          FROM CONTENT_POPUP
+         WHERE DEL_YN = 'N'
+        <if test="exposeLocationCd != null and exposeLocationCd != ''">
+           AND EXPOSE_LOCATION_CD = #{exposeLocationCd}
+        </if>
+        <if test="keyword != null and keyword != ''">
+           AND TITLE LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+         ORDER BY CONTENT_POPUP_SN DESC
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectPopupById" resultType="egovframework.eeum.content.vo.ContentPopupVO">
+        SELECT <include refid="popupColumns"/>
+          FROM CONTENT_POPUP
+         WHERE CONTENT_POPUP_SN = #{contentPopupSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 수정(미삭제) — MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updatePopup" parameterType="egovframework.eeum.content.vo.ContentPopupVO">
+        UPDATE CONTENT_POPUP
+           SET IMG_URL            = #{imgUrl},
+               TITLE              = #{title},
+               EXPOSE_LOCATION_CD = #{exposeLocationCd},
+               EXPOSE_TARGET_CD   = #{exposeTargetCd},
+               LINK_TARGET_CD     = #{linkTargetCd},
+               LINK_TARGET_VAL    = #{linkTargetVal},
+               EXPOSE_BGN_DATE    = #{exposeBgnDate},
+               EXPOSE_END_DATE    = #{exposeEndDate},
+               EXPOSE_YN          = #{exposeYn},
+               MDFCN_DT           = UTC_TIMESTAMP(6),
+               MDFR_SN            = #{mdfrSn}
+         WHERE CONTENT_POPUP_SN = #{contentPopupSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 노출 토글(미삭제) -->
+    <update id="updatePopupExposeYn">
+        UPDATE CONTENT_POPUP
+           SET EXPOSE_YN = #{exposeYn},
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{mdfrSn}
+         WHERE CONTENT_POPUP_SN = #{contentPopupSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeletePopup">
+        UPDATE CONTENT_POPUP
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE CONTENT_POPUP_SN = #{contentPopupSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- linkTarget=PRODUCT 검증 — 존재+미삭제 고택 수(0=없음) -->
+    <select id="selectActiveHouseExists" resultType="int">
+        SELECT COUNT(1)
+          FROM HOUSE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+</mapper>

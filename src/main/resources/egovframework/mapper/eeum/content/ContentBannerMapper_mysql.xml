@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.content.service.banner.dao.ContentBannerMapper">
+
+    <!-- 조회 컬럼(미삭제만 조회) — status 는 저장 안 함(서비스 산출) -->
+    <sql id="bannerColumns">
+        CONTENT_MAIN_BANNER_SN, SORT_ORDER, IMG_URL, MAIN_COPY, SUB_COPY,
+        LINK_TARGET_CD, LINK_TARGET_VAL, EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), PK 생성키 회수 -->
+    <insert id="insertBanner" parameterType="egovframework.eeum.content.vo.ContentMainBannerVO"
+            useGeneratedKeys="true" keyProperty="contentMainBannerSn">
+        INSERT INTO CONTENT_MAIN_BANNER
+            (SORT_ORDER, IMG_URL, MAIN_COPY, SUB_COPY, LINK_TARGET_CD, LINK_TARGET_VAL,
+             EXPOSE_BGN_DATE, EXPOSE_END_DATE, EXPOSE_YN, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{sortOrder}, #{imgUrl}, #{mainCopy}, #{subCopy}, #{linkTargetCd}, #{linkTargetVal},
+             #{exposeBgnDate}, #{exposeEndDate}, #{exposeYn}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 결정적 정렬(SORT_ORDER ASC, SN DESC) -->
+    <select id="selectBannerList" resultType="egovframework.eeum.content.vo.ContentMainBannerVO">
+        SELECT <include refid="bannerColumns"/>
+          FROM CONTENT_MAIN_BANNER
+         WHERE DEL_YN = 'N'
+         ORDER BY SORT_ORDER ASC, CONTENT_MAIN_BANNER_SN DESC
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectBannerById" resultType="egovframework.eeum.content.vo.ContentMainBannerVO">
+        SELECT <include refid="bannerColumns"/>
+          FROM CONTENT_MAIN_BANNER
+         WHERE CONTENT_MAIN_BANNER_SN = #{contentMainBannerSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 수정(미삭제) — MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updateBanner" parameterType="egovframework.eeum.content.vo.ContentMainBannerVO">
+        UPDATE CONTENT_MAIN_BANNER
+           SET IMG_URL         = #{imgUrl},
+               MAIN_COPY       = #{mainCopy},
+               SUB_COPY        = #{subCopy},
+               LINK_TARGET_CD  = #{linkTargetCd},
+               LINK_TARGET_VAL = #{linkTargetVal},
+               EXPOSE_BGN_DATE = #{exposeBgnDate},
+               EXPOSE_END_DATE = #{exposeEndDate},
+               EXPOSE_YN       = #{exposeYn},
+               MDFCN_DT        = UTC_TIMESTAMP(6),
+               MDFR_SN         = #{mdfrSn}
+         WHERE CONTENT_MAIN_BANNER_SN = #{contentMainBannerSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 노출 토글(미삭제) -->
+    <update id="updateBannerExposeYn">
+        UPDATE CONTENT_MAIN_BANNER
+           SET EXPOSE_YN = #{exposeYn},
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{mdfrSn}
+         WHERE CONTENT_MAIN_BANNER_SN = #{contentMainBannerSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- linkTarget=PRODUCT 검증 — 존재+미삭제 고택 수(0=없음) -->
+    <select id="selectActiveHouseExists" resultType="int">
+        SELECT COUNT(1)
+          FROM HOUSE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+</mapper>

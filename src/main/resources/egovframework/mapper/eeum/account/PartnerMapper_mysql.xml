@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.account.service.partner.dao.PartnerMapper">
+
+    <sql id="partnerColumns">
+        P.PRTNR_SN,
+        P.USER_SN,
+        P.CONM,
+        P.BRNO,
+        P.RPRSV_NM,
+        P.BRNO_VRFC_STTS,
+        P.ADDR,
+        P.DADDR,
+        P.MAIL_ORDER_SALES_NO,
+        P.PIC_NM,
+        P.PRTNR_EML_ADDR,
+        P.APRV_STTS,
+        P.APRV_USER_SN,
+        P.APRV_DT,
+        P.RJCT_RSN,
+        P.REG_DT,
+        U.EML_ADDR,
+        U.USER_NM,
+        U.ACNT_STTS
+    </sql>
+
+    <!-- detail 전용 resultMap — PIC_MBL_TELNO(암호화 컬럼)만 TypeHandler 로 복호화. 나머지는 autoMapping(mapUnderscoreToCamelCase).
+         ⚠ list/partnerColumns 에는 PIC_MBL_TELNO 를 절대 넣지 않는다(목록 대량열람에 평문연락처 복호화/노출 차단). -->
+    <resultMap id="partnerDetailMap" type="egovframework.eeum.account.vo.PartnerVO" autoMapping="true">
+        <result column="PIC_MBL_TELNO" property="picMblTelno"
+                typeHandler="egovframework.eeum.base.crypto.PicMblTelnoEncryptedTypeHandler"/>
+    </resultMap>
+
+    <!-- 활성유니크 생성컬럼 직접 조회 — UK_PRTNR_BRNO 인덱스 활용 (codex 필수수정 8) -->
+    <select id="existsActiveBrno" resultType="int">
+        SELECT EXISTS (
+            SELECT 1 FROM PRTNR_MST
+             WHERE ACTV_BRNO = #{brno}
+        )
+    </select>
+
+    <!-- 상품 소유권 해석용 — 승인완료 + 계정활성 파트너만(codex: 승인전/정지 파트너 차단). ACTV_USER_SN=UK_PRTNR_USER -->
+    <select id="selectManageablePrtnrSnByUserSn" resultType="long">
+        SELECT P.PRTNR_SN
+          FROM PRTNR_MST P
+          JOIN USER_ACNT U ON U.USER_SN = P.USER_SN
+                          AND U.DEL_YN = 'N'
+                          AND U.ACNT_STTS = 'ACTIVE'
+         WHERE P.ACTV_USER_SN = #{userSn}
+           AND P.APRV_STTS = 'APPROVED'
+    </select>
+
+    <insert id="insertPartner" parameterType="egovframework.eeum.account.vo.PartnerVO"
+            useGeneratedKeys="true" keyProperty="prtnrSn">
+        INSERT INTO PRTNR_MST (
+            USER_SN, CONM, BRNO, RPRSV_NM, ADDR, DADDR, MAIL_ORDER_SALES_NO, PIC_NM, PIC_MBL_TELNO, PRTNR_EML_ADDR,
+            APRV_STTS, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{userSn}, #{conm}, #{brno}, #{rprsvNm}, #{addr}, #{daddr}, #{mailOrderSalesNo}, #{picNm},
+            #{picMblTelno, typeHandler=egovframework.eeum.base.crypto.PicMblTelnoEncryptedTypeHandler}, #{prtnrEmlAddr},
+            'REQUESTED', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{userSn}
+        )
+    </insert>
+
+    <!-- 계정 탈퇴(U.DEL_YN) 시 파트너도 노출 제외 (codex 필수수정 4). detail 만 PIC_MBL_TELNO 복호화(resultMap). -->
+    <select id="selectPartnerByPrtnrSn" resultMap="partnerDetailMap">
+        SELECT <include refid="partnerColumns"/>, P.PIC_MBL_TELNO
+          FROM PRTNR_MST P
+          JOIN USER_ACNT U ON U.USER_SN = P.USER_SN
+                          AND U.DEL_YN = 'N'
+         WHERE P.PRTNR_SN = #{prtnrSn}
+           AND P.DEL_YN = 'N'
+    </select>
+
+    <sql id="listJoinWhere">
+          FROM PRTNR_MST P
+          JOIN USER_ACNT U ON U.USER_SN = P.USER_SN
+                          AND U.DEL_YN = 'N'
+         WHERE P.DEL_YN = 'N'
+        <if test="aprvStts != null and aprvStts != ''">
+           AND P.APRV_STTS = #{aprvStts}
+        </if>
+    </sql>
+
+    <select id="selectPartnerList" parameterType="egovframework.eeum.account.web.dto.PartnerSearchRequest"
+            resultType="egovframework.eeum.account.vo.PartnerVO">
+        SELECT <include refid="partnerColumns"/>,
+               (SELECT COUNT(*) FROM HOUSE H WHERE H.PRTNR_SN = P.PRTNR_SN AND H.DEL_YN = 'N') AS HOUSE_CNT
+        <include refid="listJoinWhere"/>
+         ORDER BY P.PRTNR_SN DESC
+         LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <select id="countPartnerList" parameterType="egovframework.eeum.account.web.dto.PartnerSearchRequest"
+            resultType="long">
+        SELECT COUNT(*)
+        <include refid="listJoinWhere"/>
+    </select>
+
+    <!-- 승인상태별 파트너 수 — 인증요청(REQUESTED) 헤더칩/사이드바 뱃지용. 미삭제(계정 미탈퇴) 기준. -->
+    <select id="countByAprvStts" resultType="long">
+        SELECT COUNT(*)
+          FROM PRTNR_MST P
+          JOIN USER_ACNT U ON U.USER_SN = P.USER_SN
+                          AND U.DEL_YN = 'N'
+         WHERE P.DEL_YN = 'N'
+           AND P.APRV_STTS = #{aprvStts}
+    </select>
+
+    <!-- REQUESTED 상태일 때만 갱신 — 동시 처리 경합 시 한 건만 성공 -->
+    <update id="updateAprvSttsIfRequested">
+        UPDATE PRTNR_MST
+           SET APRV_STTS = #{aprvStts},
+               APRV_USER_SN = #{aprvUserSn},
+               APRV_DT = UTC_TIMESTAMP(6),
+               RJCT_RSN = #{rjctRsn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{aprvUserSn}
+         WHERE PRTNR_SN = #{prtnrSn}
+           AND APRV_STTS = 'REQUESTED'
+           AND DEL_YN = 'N'
+    </update>
+
+    <insert id="insertApproveLog">
+        INSERT INTO PARTNER_APPROVE_LOG_INFO (
+            PRTNR_SN, BFR_APRV_STTS, AFT_APRV_STTS, RSN, ACTR_USER_SN, REG_DT
+        ) VALUES (
+            #{prtnrSn}, #{bfrAprvStts}, #{aftAprvStts}, #{rsn}, #{actrUserSn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 사업자정보 부분수정 — null 필드 미변경. resetBrnoVrfc=true(brno 변경)면 검증상태 REQUESTED 초기화. 상태(APRV_STTS/계정) 불변 -->
+    <update id="updatePartnerInfo">
+        UPDATE PRTNR_MST
+        <set>
+            <if test="conm != null">CONM = #{conm},</if>
+            <if test="brno != null">BRNO = #{brno},</if>
+            <if test="rprsvNm != null">RPRSV_NM = #{rprsvNm},</if>
+            <if test="addr != null">ADDR = #{addr},</if>
+            <if test="daddr != null">DADDR = #{daddr},</if>
+            <if test="mailOrderSalesNo != null">MAIL_ORDER_SALES_NO = #{mailOrderSalesNo},</if>
+            <if test="picMblTelno != null">PIC_MBL_TELNO = #{picMblTelno, typeHandler=egovframework.eeum.base.crypto.PicMblTelnoEncryptedTypeHandler},</if>
+            <if test="picNm != null">PIC_NM = #{picNm},</if>
+            <if test="prtnrEmlAddr != null">PRTNR_EML_ADDR = #{prtnrEmlAddr},</if>
+            <if test="resetBrnoVrfc">BRNO_VRFC_STTS = 'REQUESTED',</if>
+            MDFCN_DT = UTC_TIMESTAMP(6),
+            MDFR_SN = #{mdfrSn}
+        </set>
+         WHERE PRTNR_SN = #{prtnrSn}
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

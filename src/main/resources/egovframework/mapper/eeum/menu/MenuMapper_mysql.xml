@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.menu.service.menu.dao.MenuMapper">
+
+    <!-- 정렬: 최상위(0) → 부모 SN → 정렬순서 → SN (프론트 트리 조립 안정성) -->
+    <select id="selectActiveMenus" resultType="egovframework.eeum.menu.vo.MenuVO">
+        SELECT MENU_SN, MENU_CHNL_CD, UPPER_MENU_SN, MENU_NM, URL_ADDR, ICON_NM,
+               AUTH_CD, LGN_NEED_YN, SORT_SEQ
+          FROM MENU_INFO
+         WHERE MENU_CHNL_CD = #{menuChnlCd}
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+         ORDER BY COALESCE(UPPER_MENU_SN, 0), SORT_SEQ, MENU_SN
+    </select>
+
+</mapper>

@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.calendar.dao.RoomCalendarMapper">
+
+    <!-- 기간 일괄 upsert — 기존 행이면 TOTAL/PRICE/CLOSED만 갱신(SOLD_QTY 보존). CHECK(SOLD<=TOTAL) 위반 시 정수오류 -->
+    <insert id="upsertCalendarRange">
+        INSERT INTO ROOM_CALENDAR (
+            ROOM_SN, STAY_DATE, TOTAL_QTY, PRICE_AMT, CLOSED_YN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES
+        <foreach collection="dates" item="d" separator=",">
+            (#{roomSn}, #{d}, #{totalQty}, #{priceAmt}, #{closedYn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{actorSn})
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+            TOTAL_QTY = VALUES(TOTAL_QTY),
+            PRICE_AMT = VALUES(PRICE_AMT),
+            CLOSED_YN = VALUES(CLOSED_YN),
+            MDFCN_DT  = UTC_TIMESTAMP(6),
+            MDFR_SN   = #{actorSn}
+    </insert>
+
+    <!-- 가격/수량 전용 upsert — 기존 행은 TOTAL/PRICE만 갱신(CLOSED_YN·SOLD_QTY 보존), 신규 행만 CLOSED_YN='N'.
+         ⚠ ON DUPLICATE 에 CLOSED_YN 을 넣지 않는다 — 요금 변경이 기존 마감일을 재오픈하면 안 됨(set 과의 핵심 차이). -->
+    <insert id="upsertPriceStockRange">
+        INSERT INTO ROOM_CALENDAR (
+            ROOM_SN, STAY_DATE, TOTAL_QTY, PRICE_AMT, CLOSED_YN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES
+        <foreach collection="dates" item="d" separator=",">
+            (#{roomSn}, #{d}, #{totalQty}, #{priceAmt}, 'N', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{actorSn})
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+            TOTAL_QTY = VALUES(TOTAL_QTY),
+            PRICE_AMT = VALUES(PRICE_AMT),
+            MDFCN_DT  = UTC_TIMESTAMP(6),
+            MDFR_SN   = #{actorSn}
+    </insert>
+
+    <select id="selectCalendarByRoomAndRange" resultType="egovframework.eeum.house.vo.RoomCalendarVO">
+        SELECT ROOM_CALENDAR_SN, ROOM_SN, STAY_DATE, TOTAL_QTY, SOLD_QTY, PRICE_AMT, CLOSED_YN, CLOSE_RSN
+          FROM ROOM_CALENDAR
+         WHERE ROOM_SN = #{roomSn}
+           AND STAY_DATE BETWEEN #{startDate} AND #{endDate}
+         ORDER BY STAY_DATE
+    </select>
+
+    <!-- 마감(Y) 전용 — 기존 행이면 CLOSED_YN만 'Y'(TOTAL/PRICE/SOLD 보존), 없으면 0/0/'Y' placeholder 생성. 가격/수량 클로버 없음 -->
+    <insert id="closeDatesUpsert">
+        INSERT INTO ROOM_CALENDAR (
+            ROOM_SN, STAY_DATE, TOTAL_QTY, PRICE_AMT, CLOSED_YN, CLOSE_RSN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES
+        <foreach collection="dates" item="d" separator=",">
+            (#{roomSn}, #{d}, 0, 0, 'Y', #{closeRsn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{actorSn})
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+            CLOSED_YN = 'Y',
+            CLOSE_RSN = #{closeRsn},
+            MDFCN_DT  = UTC_TIMESTAMP(6),
+            MDFR_SN   = #{actorSn}
+    </insert>
+
+    <!-- 해제(open) 전 검증용 — 주어진 날짜들 중 실제 행이 있는 개수 -->
+    <select id="countExistingDates" resultType="int">
+        SELECT COUNT(*)
+          FROM ROOM_CALENDAR
+         WHERE ROOM_SN = #{roomSn}
+           AND STAY_DATE IN
+        <foreach collection="dates" item="d" open="(" separator="," close=")">#{d}</foreach>
+    </select>
+
+    <!-- 해제(N) 전용 — 기존 행만 CLOSED_YN='N'(없는 날짜는 만들지 않음). TOTAL/PRICE/SOLD 보존 -->
+    <update id="openDates">
+        UPDATE ROOM_CALENDAR
+           SET CLOSED_YN = 'N',
+               CLOSE_RSN = NULL,
+               MDFCN_DT  = UTC_TIMESTAMP(6),
+               MDFR_SN   = #{actorSn}
+         WHERE ROOM_SN = #{roomSn}
+           AND STAY_DATE IN
+        <foreach collection="dates" item="d" open="(" separator="," close=")">#{d}</foreach>
+    </update>
+
+    <!-- 가용성 집계 — ACTIVE 고택·객실, [checkIn, checkOut) 의 판매가능 밤(마감X·재고qty이상·가격>0) 수와 가격합계.
+         PRICE_AMT>0 은 발행게이트(countFutureSellable*)·예약생성 밤검증과 동일 판매가능 기준(계약 정렬) -->
+    <select id="selectRoomAvailability" resultType="egovframework.eeum.house.vo.RoomAvailabilityVO">
+        SELECT R.ROOM_SN, R.ROOM_NM, R.BSC_PRSN_CNT, R.MAX_PRSN_CNT, R.MIN_STAY_NGT_CNT,
+               COUNT(C.STAY_DATE) AS SELLABLE_NIGHTS,
+               SUM(C.PRICE_AMT)   AS TOTAL_PRICE
+          FROM ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN
+                      AND H.HOUSE_STTS_CD = 'ACTIVE'
+                      AND H.DEL_YN = 'N'
+          LEFT JOIN ROOM_CALENDAR C ON C.ROOM_SN = R.ROOM_SN
+                      AND C.STAY_DATE &gt;= #{checkIn}
+                      AND C.STAY_DATE &lt; #{checkOut}
+                      AND C.CLOSED_YN = 'N'
+                      AND C.PRICE_AMT &gt; 0
+                      AND (C.TOTAL_QTY - C.SOLD_QTY) &gt;= #{qty}
+         WHERE R.HOUSE_SN = #{houseSn}
+           AND R.ROOM_STTS_CD = 'ACTIVE'
+           AND R.DEL_YN = 'N'
+           AND EXISTS (SELECT 1 FROM PRTNR_MST P JOIN USER_ACNT U ON U.USER_SN = P.USER_SN
+                        WHERE P.PRTNR_SN = H.PRTNR_SN AND P.DEL_YN = 'N'
+                          AND P.APRV_STTS = 'APPROVED' AND U.ACNT_STTS = 'ACTIVE')
+         GROUP BY R.ROOM_SN, R.ROOM_NM, R.BSC_PRSN_CNT, R.MAX_PRSN_CNT, R.MIN_STAY_NGT_CNT
+         ORDER BY R.ROOM_SN
+    </select>
+
+    <!-- 발행검증 — 고택의 미래 판매가능 캘린더 행 수(ACTIVE 객실, fromDate 이후, 마감X·가격>0·재고여유) -->
+    <select id="countFutureSellableByHouse" resultType="int">
+        SELECT COUNT(*)
+          FROM ROOM_CALENDAR RC
+          JOIN ROOM R ON RC.ROOM_SN = R.ROOM_SN
+         WHERE R.HOUSE_SN = #{houseSn}
+           AND R.DEL_YN = 'N'
+           AND R.ROOM_STTS_CD = 'ACTIVE'
+           AND RC.STAY_DATE &gt;= #{fromDate}
+           AND RC.PRICE_AMT &gt; 0
+           AND RC.CLOSED_YN = 'N'
+           AND RC.TOTAL_QTY &gt; RC.SOLD_QTY
+    </select>
+
+    <!-- 발행검증(객실-결속) — 해당 객실의 미래 판매가능 캘린더 행 수(fromDate 이후, 마감X·가격>0·재고여유) -->
+    <select id="countFutureSellableByRoom" resultType="int">
+        SELECT COUNT(*)
+          FROM ROOM_CALENDAR RC
+         WHERE RC.ROOM_SN = #{roomSn}
+           AND RC.STAY_DATE &gt;= #{fromDate}
+           AND RC.PRICE_AMT &gt; 0
+           AND RC.CLOSED_YN = 'N'
+           AND RC.TOTAL_QTY &gt; RC.SOLD_QTY
+    </select>
+
+</mapper>

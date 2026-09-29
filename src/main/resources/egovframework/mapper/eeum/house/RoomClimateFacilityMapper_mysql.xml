@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.room.dao.RoomClimateFacilityMapper">
+
+    <select id="selectActiveByRoom" resultType="egovframework.eeum.house.vo.RoomClimateFacilityVO">
+        SELECT ROOM_CLIM_FCLTY_SN, ROOM_SN, FCLTY_DIV_CD, FCLTY_CD, REG_DT, MDFCN_DT
+          FROM ROOM_CLIM_FCLTY
+         WHERE ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+         ORDER BY FCLTY_DIV_CD ASC, FCLTY_CD ASC
+    </select>
+
+    <!-- 교체 전 활성 냉난방시설 전부 숨김 — ROOM JOIN HOUSE + prtnrSn 가드 -->
+    <update id="softDeleteActiveByRoom">
+        UPDATE ROOM_CLIM_FCLTY RC
+          JOIN ROOM R  ON R.ROOM_SN = RC.ROOM_SN AND R.DEL_YN = 'N'
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN AND H.PRTNR_SN = #{prtnrSn} AND H.DEL_YN = 'N'
+           SET RC.DEL_YN = 'Y',
+               RC.MDFCN_DT = UTC_TIMESTAMP(6),
+               RC.MDFR_SN = #{mdfrSn}
+         WHERE RC.ROOM_SN = #{roomSn}
+           AND RC.DEL_YN = 'N'
+    </update>
+
+    <!-- insert: MDFCN_DT=REG_DT 규칙 -->
+    <insert id="insertClimateFacility" parameterType="egovframework.eeum.house.vo.RoomClimateFacilityVO"
+            useGeneratedKeys="true" keyProperty="roomClimFcltySn">
+        INSERT INTO ROOM_CLIM_FCLTY (
+            ROOM_SN, FCLTY_DIV_CD, FCLTY_CD, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{roomSn}, #{fcltyDivCd}, #{fcltyCd}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+        <!-- DEL_YN='N' 은 DB 기본값 -->
+    </insert>
+
+</mapper>

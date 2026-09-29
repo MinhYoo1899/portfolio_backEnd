@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.image.dao.RoomImageMapper">
+
+    <insert id="insertRoomImage" parameterType="egovframework.eeum.house.vo.RoomImageVO"
+            useGeneratedKeys="true" keyProperty="roomImgSn">
+        INSERT INTO ROOM_IMAGE (
+            ROOM_SN, ATCH_FILE_SN, SORT_SEQ, RPRS_YN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{roomSn}, #{atchFileSn}, #{sortSeq}, #{rprsYn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+    </insert>
+
+    <select id="selectActiveImagesByRoom" resultType="egovframework.eeum.house.vo.RoomImageVO">
+        SELECT RI.ROOM_IMG_SN, RI.ROOM_SN, RI.ATCH_FILE_SN, RI.SORT_SEQ, RI.RPRS_YN,
+               A.URL_ADDR, A.ORGNL_FILE_NM
+          FROM ROOM_IMAGE RI
+          JOIN ATCH_FILE A ON A.ATCH_FILE_SN = RI.ATCH_FILE_SN
+         WHERE RI.ROOM_SN = #{roomSn}
+           AND RI.DEL_YN = 'N'
+         ORDER BY RI.SORT_SEQ, RI.ROOM_IMG_SN
+    </select>
+
+    <select id="selectRoomImageForUpdate" resultType="egovframework.eeum.house.vo.RoomImageVO">
+        SELECT ROOM_IMG_SN, ROOM_SN, ATCH_FILE_SN, SORT_SEQ, RPRS_YN, DEL_YN
+          FROM ROOM_IMAGE
+         WHERE ROOM_IMG_SN = #{roomImgSn}
+         FOR UPDATE
+    </select>
+
+    <select id="maxSortSeqByRoom" resultType="int">
+        SELECT COALESCE(MAX(SORT_SEQ), 0)
+          FROM ROOM_IMAGE
+         WHERE ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <select id="countActiveImagesByRoom" resultType="int">
+        SELECT COUNT(*)
+          FROM ROOM_IMAGE
+         WHERE ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <select id="selectFirstActiveImageSnByRoom" resultType="long">
+        SELECT ROOM_IMG_SN
+          FROM ROOM_IMAGE
+         WHERE ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+         ORDER BY SORT_SEQ, ROOM_IMG_SN
+         LIMIT 1
+    </select>
+
+    <update id="softDeleteRoomImage">
+        UPDATE ROOM_IMAGE
+           SET DEL_YN = 'Y',
+               RPRS_YN = 'N',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ROOM_IMG_SN = #{roomImgSn}
+           AND ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="clearRepresentativeByRoom">
+        UPDATE ROOM_IMAGE
+           SET RPRS_YN = 'N',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+           AND RPRS_YN = 'Y'
+    </update>
+
+    <update id="setRepresentative">
+        UPDATE ROOM_IMAGE
+           SET RPRS_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE ROOM_IMG_SN = #{roomImgSn}
+           AND ROOM_SN = #{roomSn}
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

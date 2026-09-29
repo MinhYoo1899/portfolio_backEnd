@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.coupon.service.coupon.dao.CouponMapper">
+
+    <!-- 조회 컬럼(미삭제) — status 는 저장 안 함(서비스/SQL 날짜 산출) -->
+    <sql id="couponColumns">
+        COUPON_SN, TITLE, CONTENT, DISCOUNT_TYPE_CD, DISCOUNT_VAL, TARGET_TYPE_CD,
+        USAGE_BGN_DATE, USAGE_END_DATE, ISSUED_CNT, USED_CNT, REG_DT
+    </sql>
+
+    <!-- 목록 공용 필터(미삭제 + 할인유형/제목 + 상태=사용기간 날짜조건) -->
+    <sql id="couponListWhere">
+        WHERE DEL_YN = 'N'
+        <if test="discountTypeCd != null and discountTypeCd != ''"> AND DISCOUNT_TYPE_CD = #{discountTypeCd} </if>
+        <if test="keyword != null and keyword != ''"> AND TITLE LIKE CONCAT('%', #{keyword}, '%') </if>
+        <if test='status != null and status.equals("UPCOMING")'> AND #{today} &lt; USAGE_BGN_DATE </if>
+        <if test='status != null and status.equals("ENDED")'> AND #{today} &gt; USAGE_END_DATE </if>
+        <if test='status != null and status.equals("ACTIVE")'> AND USAGE_BGN_DATE &lt;= #{today} AND #{today} &lt;= USAGE_END_DATE </if>
+    </sql>
+
+    <!-- 등록 — REG_DT=MDFCN_DT=UTC_TIMESTAMP(6)(수정일=등록일 규칙), ISSUED/USED_CNT=0(default), PK 생성키 회수 -->
+    <insert id="insertCoupon" parameterType="egovframework.eeum.coupon.vo.CouponVO"
+            useGeneratedKeys="true" keyProperty="couponSn">
+        INSERT INTO COUPON
+            (TITLE, CONTENT, DISCOUNT_TYPE_CD, DISCOUNT_VAL, TARGET_TYPE_CD, USAGE_BGN_DATE, USAGE_END_DATE,
+             REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN)
+        VALUES
+            (#{title}, #{content}, #{discountTypeCd}, #{discountVal}, #{targetTypeCd}, #{usageBgnDate}, #{usageEndDate},
+             UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{rgtrSn})
+    </insert>
+
+    <!-- 목록 — 미삭제 + 필터 + 오프셋 페이지네이션, 결정적 정렬(SN DESC) -->
+    <select id="selectCouponList" resultType="egovframework.eeum.coupon.vo.CouponVO">
+        SELECT <include refid="couponColumns"/>
+          FROM COUPON
+        <include refid="couponListWhere"/>
+         ORDER BY COUPON_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 목록 총건수(동일 필터) -->
+    <select id="countCoupon" resultType="long">
+        SELECT COUNT(*)
+          FROM COUPON
+        <include refid="couponListWhere"/>
+    </select>
+
+    <!-- 단건(미삭제) -->
+    <select id="selectCouponById" resultType="egovframework.eeum.coupon.vo.CouponVO">
+        SELECT <include refid="couponColumns"/>
+          FROM COUPON
+         WHERE COUPON_SN = #{couponSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 전체 교체 수정(미삭제) — ISSUED_CNT/USED_CNT 미변경(읽기전용 보존), MDFCN_DT/MDFR_SN 갱신 -->
+    <update id="updateCoupon" parameterType="egovframework.eeum.coupon.vo.CouponVO">
+        UPDATE COUPON
+           SET TITLE            = #{title},
+               CONTENT          = #{content},
+               DISCOUNT_TYPE_CD = #{discountTypeCd},
+               DISCOUNT_VAL     = #{discountVal},
+               TARGET_TYPE_CD   = #{targetTypeCd},
+               USAGE_BGN_DATE   = #{usageBgnDate},
+               USAGE_END_DATE   = #{usageEndDate},
+               MDFCN_DT         = UTC_TIMESTAMP(6),
+               MDFR_SN          = #{mdfrSn}
+         WHERE COUPON_SN = #{couponSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- soft delete(DEL_YN='Y', 미삭제만) -->
+    <update id="softDeleteCoupon">
+        UPDATE COUPON
+           SET DEL_YN   = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE COUPON_SN = #{couponSn}
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

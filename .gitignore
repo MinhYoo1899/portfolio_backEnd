@@ -1,0 +1,33 @@
+# ── 빌드 산출물 ──
+target/
+build/
+*.class
+
+# ── 시크릿 / 환경 ──
+# 개발 환경설정은 .env.develop 사용(커밋 대상). 로컬 개인 오버라이드 .env 는 제외.
+.env
+.env.local
+.env.develop
+
+# ── 로그 / 업로드 ──
+log/
+logs/
+files/
+*.log
+
+# ── IDE ──
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# ── OS / 기타 ──
+.DS_Store
+Thumbs.db
+
+# ── OMC 작업 산출물 ──
+.omc/
+
+# ── Claude Code 개인 설정(로컬) ──
+.claude/settings.local.json

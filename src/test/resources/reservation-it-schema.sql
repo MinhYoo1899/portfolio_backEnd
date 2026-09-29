@@ -1,0 +1,64 @@
+-- =============================================================================
+-- 예약 확정 통합검증(@MybatisTest) 전용 H2 스키마 — MySQL 호환모드(MODE=MySQL).
+--   운영 DDL(V18 ROOM_CALENDAR / V36 RESERVATION)의 컬럼·타입·CK 제약을 그대로 옮기되,
+--   H2 미지원 절(ENGINE/CHARSET/COLLATE)과 타 테이블 FK(ROOM/HOUSE/PRTNR_MST/USER_ACNT)는 제외한다.
+--   재고 원복(CK_ROOM_CALENDAR_QTY)·소유권 WHERE(RESERVER_USER_SN) 검증에 필요한 제약만 유지.
+-- UTC_TIMESTAMP(6): H2 미지원 → 정적 보정 메서드(H2Compat.utcTimestamp)로 ALIAS 바인딩.
+-- =============================================================================
+
+-- 매퍼 SQL 의 UTC_TIMESTAMP(6) 보정(감사시각) — 확정/insert 경로가 H2 에서 실행되도록 한다.
+CREATE ALIAS IF NOT EXISTS UTC_TIMESTAMP FOR "egovframework.eeum.reservation.it.H2Compat.utcTimestamp";
+
+-- 재고/요금 캘린더(V18) — SOLD_QTY <= TOTAL_QTY 최후 가드(CK)로 오버부킹·부분차감 원복 검증.
+CREATE TABLE ROOM_CALENDAR (
+    ROOM_CALENDAR_SN BIGINT      NOT NULL AUTO_INCREMENT,
+    ROOM_SN          BIGINT      NOT NULL,
+    STAY_DATE        DATE        NOT NULL,
+    TOTAL_QTY        INT         NOT NULL DEFAULT 0,
+    SOLD_QTY         INT         NOT NULL DEFAULT 0,
+    PRICE_AMT        INT         NOT NULL DEFAULT 0,
+    CLOSED_YN        CHAR(1)     NOT NULL DEFAULT 'N',
+    REG_DT           DATETIME(6) NOT NULL,
+    RGTR_SN          BIGINT      NULL,
+    MDFCN_DT         DATETIME(6) NULL,
+    MDFR_SN          BIGINT      NULL,
+    PRIMARY KEY (ROOM_CALENDAR_SN),
+    CONSTRAINT UK_ROOM_CALENDAR UNIQUE (ROOM_SN, STAY_DATE),
+    CONSTRAINT CK_ROOM_CALENDAR_QTY   CHECK (TOTAL_QTY >= 0 AND SOLD_QTY >= 0 AND SOLD_QTY <= TOTAL_QTY),
+    CONSTRAINT CK_ROOM_CALENDAR_PRICE CHECK (PRICE_AMT >= 0),
+    CONSTRAINT CK_ROOM_CALENDAR_CLOSED CHECK (CLOSED_YN IN ('Y','N'))
+);
+
+-- 예약 헤더(V36) — 소유권 WHERE(RESERVER_USER_SN) 검증에 필요한 컬럼 전체. 타 테이블 FK 는 제외.
+CREATE TABLE RESERVATION (
+    RESERVATION_SN      BIGINT      NOT NULL AUTO_INCREMENT,
+    ORDER_NO            VARCHAR(40) NOT NULL,
+    IDEMPOTENCY_KEY     VARCHAR(80) NULL,
+    RESERVATION_STTS_CD VARCHAR(20) NOT NULL DEFAULT 'HOLD',
+    PRTNR_SN            BIGINT      NOT NULL,
+    HOUSE_SN            BIGINT      NOT NULL,
+    ROOM_SN             BIGINT      NOT NULL,
+    RESERVER_USER_SN    BIGINT      NOT NULL,
+    CHECK_IN_DATE       DATE        NOT NULL,
+    CHECK_OUT_DATE      DATE        NOT NULL,
+    NGT_CNT             INT         NOT NULL,
+    GUEST_CNT           INT         NOT NULL DEFAULT 1,
+    TOTAL_AMT           INT         NOT NULL,
+    CRNC_CD             CHAR(3)     NOT NULL DEFAULT 'KRW',
+    HOLD_EXPRY_DT       DATETIME(6) NULL,
+    HOLD_ID             VARCHAR(64) NULL,
+    REG_DT              DATETIME(6) NOT NULL,
+    RGTR_SN             BIGINT      NULL,
+    MDFCN_DT            DATETIME(6) NULL,
+    MDFR_SN             BIGINT      NULL,
+    DEL_YN              CHAR(1)     NOT NULL DEFAULT 'N',
+    PRIMARY KEY (RESERVATION_SN),
+    CONSTRAINT UK_RESERVATION_ORDER_NO    UNIQUE (ORDER_NO),
+    CONSTRAINT UK_RESERVATION_IDEMPOTENCY UNIQUE (RESERVER_USER_SN, IDEMPOTENCY_KEY),
+    CONSTRAINT CK_RESERVATION_DATE  CHECK (CHECK_OUT_DATE > CHECK_IN_DATE),
+    CONSTRAINT CK_RESERVATION_NGT   CHECK (NGT_CNT > 0),
+    CONSTRAINT CK_RESERVATION_GUEST CHECK (GUEST_CNT > 0),
+    CONSTRAINT CK_RESERVATION_AMT   CHECK (TOTAL_AMT >= 0),
+    CONSTRAINT CK_RESERVATION_STTS  CHECK (RESERVATION_STTS_CD IN ('HOLD','PAYMENT_PENDING','RESERVED','USED','CANCELLED','EXPIRED')),
+    CONSTRAINT CK_RESERVATION_DEL   CHECK (DEL_YN IN ('Y','N'))
+);

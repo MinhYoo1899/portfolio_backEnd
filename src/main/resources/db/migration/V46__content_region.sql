@@ -1,0 +1,67 @@
+-- =============================================================================
+-- V46 : 콘텐츠 지역별 즐길거리(CONTENT_REGION) + 카테고리/유형 공통코드 — 콘텐츠관리 CT-W3(화면정의서 콘텐츠 §1.3/CT-10~14)
+-- 설계(2026-07-08):
+--   지역 기반 즐길거리(코스/관광) 카드. 배너와 동형(플랫폼 소유·@PreAuthorize·status 조회산출 재사용) + 리치텍스트 본문·페이지네이션.
+--   category=REGION_CONTENT_CATEGORY(EDITOR_PICK/TRENDING/REC_COURSE), type=REGION_CONTENT_TYPE(DAY_COURSE/TOUR),
+--   region=시도코드(REGION 참조, RegionService 검증 재사용). viewCount/cmntCount=읽기전용(등록 0, 별도 증감).
+--   생성 exposeMode로 EXPOSE_YN, PUT 전체교체(조회수/댓글수 보존), PATCH toggle, DELETE soft. 목록 페이지네이션(기본 8/페이지).
+--   권한 CONTENT_VIEW/CONTENT_MNG(V39) 재사용. 명명·감사5·CK·utf8mb4_0900.
+-- =============================================================================
+
+-- 1) 즐길거리 테이블 -----------------------------------------------------------
+CREATE TABLE CONTENT_REGION (
+    CONTENT_REGION_SN BIGINT       NOT NULL AUTO_INCREMENT COMMENT '즐길거리일련번호',
+    CATEGORY_CD       VARCHAR(50)  NOT NULL                COMMENT '카테고리(COMM_CD.GROUP_CD=REGION_CONTENT_CATEGORY)',
+    TYPE_CD           VARCHAR(50)  NOT NULL                COMMENT '유형(COMM_CD.GROUP_CD=REGION_CONTENT_TYPE)',
+    SIDO_REGION_CD    VARCHAR(50)  NOT NULL                COMMENT '지역(시도, REGION 논리참조)',
+    THUMBNAIL_URL     VARCHAR(500) NOT NULL                COMMENT '대표이미지 URL(자체 파일인프라 반환 경로)',
+    TITLE             VARCHAR(200) NOT NULL                COMMENT '제목',
+    ROUTE_SUMMARY     VARCHAR(500) NULL                    COMMENT '경로 요약(카드 표시)',
+    BODY_CN           MEDIUMTEXT   NULL                    COMMENT '본문(리치텍스트 HTML)',
+    VIEW_CNT          INT          NOT NULL DEFAULT 0      COMMENT '조회수(읽기전용)',
+    CMNT_CNT          INT          NOT NULL DEFAULT 0      COMMENT '댓글수(읽기전용)',
+    EXPOSE_BGN_DATE   DATE         NULL                    COMMENT '노출시작일(KST)',
+    EXPOSE_END_DATE   DATE         NULL                    COMMENT '노출종료일(KST)',
+    EXPOSE_YN         CHAR(1)      NOT NULL DEFAULT 'Y'    COMMENT '노출여부(isActive 토글)',
+    REG_DT            DATETIME(6)  NOT NULL                COMMENT '등록일시',
+    RGTR_SN           BIGINT       NULL                    COMMENT '등록자(사용자일련번호)',
+    MDFCN_DT          DATETIME(6)  NULL                    COMMENT '수정일시',
+    MDFR_SN           BIGINT       NULL                    COMMENT '수정자(사용자일련번호)',
+    DEL_YN            CHAR(1)      NOT NULL DEFAULT 'N'    COMMENT '삭제여부(soft delete)',
+    PRIMARY KEY (CONTENT_REGION_SN),
+    KEY IX_CONTENT_REGION_FILTER (CATEGORY_CD, TYPE_CD, SIDO_REGION_CD),
+    KEY IX_CONTENT_REGION_EXPOSE (EXPOSE_YN, EXPOSE_BGN_DATE, EXPOSE_END_DATE),
+    CONSTRAINT CK_CONTENT_REGION_EXPOSE_YN CHECK (EXPOSE_YN IN ('Y','N')),
+    CONSTRAINT CK_CONTENT_REGION_DEL       CHECK (DEL_YN IN ('Y','N')),
+    CONSTRAINT CK_CONTENT_REGION_DATE      CHECK (EXPOSE_END_DATE IS NULL OR EXPOSE_BGN_DATE IS NULL OR EXPOSE_END_DATE >= EXPOSE_BGN_DATE)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='콘텐츠 지역별 즐길거리';
+
+-- 2) 카테고리 공통코드 ---------------------------------------------------------
+INSERT INTO COMM_CD_GROUP (GROUP_CD, GROUP_NM, EXPLN, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_CATEGORY', '즐길거리 카테고리', '즐길거리 카테고리(EDITOR_PICK/TRENDING/REC_COURSE)', 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD_GROUP WHERE GROUP_CD = 'REGION_CONTENT_CATEGORY' AND DEL_YN = 'N');
+
+INSERT INTO COMM_CD (GROUP_CD, CD, CD_NM, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_CATEGORY', 'EDITOR_PICK', '이번주 에디터 픽', 1, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD WHERE GROUP_CD = 'REGION_CONTENT_CATEGORY' AND CD = 'EDITOR_PICK' AND DEL_YN = 'N');
+
+INSERT INTO COMM_CD (GROUP_CD, CD, CD_NM, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_CATEGORY', 'TRENDING', '지금 뜨는 즐길거리', 2, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD WHERE GROUP_CD = 'REGION_CONTENT_CATEGORY' AND CD = 'TRENDING' AND DEL_YN = 'N');
+
+INSERT INTO COMM_CD (GROUP_CD, CD, CD_NM, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_CATEGORY', 'REC_COURSE', '에디터 추천 코스', 3, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD WHERE GROUP_CD = 'REGION_CONTENT_CATEGORY' AND CD = 'REC_COURSE' AND DEL_YN = 'N');
+
+-- 3) 유형 공통코드 -------------------------------------------------------------
+INSERT INTO COMM_CD_GROUP (GROUP_CD, GROUP_NM, EXPLN, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_TYPE', '즐길거리 유형', '즐길거리 유형(DAY_COURSE/TOUR)', 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD_GROUP WHERE GROUP_CD = 'REGION_CONTENT_TYPE' AND DEL_YN = 'N');
+
+INSERT INTO COMM_CD (GROUP_CD, CD, CD_NM, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_TYPE', 'DAY_COURSE', '당일 코스', 1, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD WHERE GROUP_CD = 'REGION_CONTENT_TYPE' AND CD = 'DAY_COURSE' AND DEL_YN = 'N');
+
+INSERT INTO COMM_CD (GROUP_CD, CD, CD_NM, SORT_SEQ, USE_YN, REG_DT, MDFCN_DT)
+SELECT 'REGION_CONTENT_TYPE', 'TOUR', '관광', 2, 'Y', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+ WHERE NOT EXISTS (SELECT 1 FROM COMM_CD WHERE GROUP_CD = 'REGION_CONTENT_TYPE' AND CD = 'TOUR' AND DEL_YN = 'N');

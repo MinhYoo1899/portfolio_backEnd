@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.publichouse.dao.PublicHouseMapper">
+
+    <!-- 공개 가시성 WHERE — ACTIVE 고택 + 소유 파트너 승인·활성(정지 파트너 즉시 차단).
+         목록/상세/존재확인이 이 조각을 공유해 노출 기준이 갈라지지 않게 한다(DRAFT 격리).
+         가용검색(RoomCalendarMapper.selectRoomAvailability)은 동일 기준을 자체 쿼리에 내장(계약 기준 동일). keyword 파라미터 미참조 -->
+    <sql id="publicVisibleWhere">
+        WHERE H.HOUSE_STTS_CD = 'ACTIVE'
+          AND H.DEL_YN = 'N'
+          AND EXISTS (SELECT 1 FROM PRTNR_MST P JOIN USER_ACNT U ON U.USER_SN = P.USER_SN
+                       WHERE P.PRTNR_SN = H.PRTNR_SN AND P.DEL_YN = 'N'
+                         AND P.APRV_STTS = 'APPROVED' AND U.ACNT_STTS = 'ACTIVE')
+    </sql>
+
+    <!-- 키워드(고택명/주소) 필터 — keyword 파라미터가 있는 목록 계열 전용(가시성 조각과 분리) -->
+    <sql id="keywordWhere">
+        <if test="keyword != null and keyword != ''">
+            AND (H.HOUSE_NM LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\\'
+                 OR H.ADDR LIKE CONCAT('%', #{keyword}, '%') ESCAPE '\\')
+        </if>
+    </sql>
+
+    <select id="selectPublicHouseListOffset" resultType="egovframework.eeum.house.vo.PublicHouseListVO">
+        SELECT H.HOUSE_SN, H.HOUSE_NM,
+               SIDO.REGION_NM    AS SIDO_NM,
+               SIGUNGU.REGION_NM AS SIGUNGU_NM,
+               (SELECT HI.ATCH_FILE_SN FROM HOUSE_IMAGE HI
+                 WHERE HI.HOUSE_SN = H.HOUSE_SN AND HI.DEL_YN = 'N' AND HI.RPRS_YN = 'Y' LIMIT 1) AS RPRS_ATCH_FILE_SN,
+               (SELECT MIN(R.BSC_PRSN_CNT) FROM ROOM R
+                 WHERE R.HOUSE_SN = H.HOUSE_SN AND R.DEL_YN = 'N' AND R.ROOM_STTS_CD = 'ACTIVE') AS BSC_PRSN_CNT,
+               (SELECT MAX(R.MAX_PRSN_CNT) FROM ROOM R
+                 WHERE R.HOUSE_SN = H.HOUSE_SN AND R.DEL_YN = 'N' AND R.ROOM_STTS_CD = 'ACTIVE') AS MAX_PRSN_CNT
+          FROM HOUSE H
+          LEFT JOIN REGION SIDO    ON SIDO.REGION_CD    = H.SIDO_REGION_CD
+          LEFT JOIN REGION SIGUNGU ON SIGUNGU.REGION_CD = H.SIGUNGU_REGION_CD
+        <include refid="publicVisibleWhere"/>
+        <include refid="keywordWhere"/>
+         ORDER BY H.HOUSE_SN DESC
+         LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countPublicHouses" resultType="long">
+        SELECT COUNT(*)
+          FROM HOUSE H
+        <include refid="publicVisibleWhere"/>
+        <include refid="keywordWhere"/>
+    </select>
+
+    <!-- 공개 고택 상세 — 가시성 조각 재사용(비공개/미승인 = 0행 → 서비스가 404 은닉).
+         노출 금지: PRTNR_SN·상태코드·ZIP·DADDR·감사컬럼·담당자 연락처(PIC_*). 판매자 표시정보는 4필드만 -->
+    <select id="selectPublicHouseDetail" resultType="egovframework.eeum.house.vo.PublicHouseDetailVO">
+        SELECT H.HOUSE_SN, H.HOUSE_NM, H.ADDR, H.HOUSE_DC,
+               H.ADULT_ADD_CHRG_AMT, H.CHILD_ADD_CHRG_AMT, H.INFANT_ADD_CHRG_AMT,
+               H.CHKIN_TIME, H.CHKOUT_TIME, H.LATE_CHKOUT_TIME, H.RSVT_CNFIRM_CD,
+               H.CNCL_RFND_PLCY_CN, H.PBTRNSP_GUIDE_CN, H.NOTICE_CN,
+               SIDO.REGION_NM    AS SIDO_NM,
+               SIGUNGU.REGION_NM AS SIGUNGU_NM,
+               PM.CONM, PM.RPRSV_NM, PM.BRNO, PM.MAIL_ORDER_SALES_NO
+          FROM HOUSE H
+          JOIN PRTNR_MST PM ON PM.PRTNR_SN = H.PRTNR_SN
+          LEFT JOIN REGION SIDO    ON SIDO.REGION_CD    = H.SIDO_REGION_CD
+          LEFT JOIN REGION SIGUNGU ON SIGUNGU.REGION_CD = H.SIGUNGU_REGION_CD
+        <include refid="publicVisibleWhere"/>
+           AND H.HOUSE_SN = #{houseSn}
+    </select>
+
+    <!-- 공개 객실 요약 — ACTIVE 객실만(파트너 관리조회 selectRoomsByHouse 는 전 상태라 공개 재사용 금지).
+         내부 재고설정(DFLT_STOCK_QTY)·상태코드·감사컬럼 미노출. 재고/가격은 가용검색이 담당 -->
+    <select id="selectPublicRoomsByHouse" resultType="egovframework.eeum.house.vo.PublicRoomSummaryVO">
+        SELECT R.ROOM_SN, R.ROOM_NM, R.BSC_PRSN_CNT, R.MAX_PRSN_CNT, R.MIN_STAY_NGT_CNT,
+               R.ROOM_DC, R.AREA_SQM, R.ROOM_CNT, R.BATHRM_CNT,
+               (SELECT RI.ATCH_FILE_SN FROM ROOM_IMAGE RI
+                 WHERE RI.ROOM_SN = R.ROOM_SN AND RI.DEL_YN = 'N' AND RI.RPRS_YN = 'Y' LIMIT 1) AS RPRS_ATCH_FILE_SN
+          FROM ROOM R
+         WHERE R.HOUSE_SN = #{houseSn}
+           AND R.ROOM_STTS_CD = 'ACTIVE'
+           AND R.DEL_YN = 'N'
+         ORDER BY R.ROOM_SN
+    </select>
+
+    <!-- 공개 가시성 존재 확인 — 가용검색의 404 은닉 선체크(상세와 동일 기준) -->
+    <select id="countPublicVisibleHouse" resultType="int">
+        SELECT COUNT(*)
+          FROM HOUSE H
+        <include refid="publicVisibleWhere"/>
+           AND H.HOUSE_SN = #{houseSn}
+    </select>
+
+</mapper>

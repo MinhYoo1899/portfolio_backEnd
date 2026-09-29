@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.image.dao.HouseImageMapper">
+
+    <insert id="insertHouseImage" parameterType="egovframework.eeum.house.vo.HouseImageVO"
+            useGeneratedKeys="true" keyProperty="houseImgSn">
+        INSERT INTO HOUSE_IMAGE (
+            HOUSE_SN, ATCH_FILE_SN, SORT_SEQ, RPRS_YN, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{houseSn}, #{atchFileSn}, #{sortSeq}, #{rprsYn}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+    </insert>
+
+    <select id="selectActiveImagesByHouse" resultType="egovframework.eeum.house.vo.HouseImageVO">
+        SELECT HI.HOUSE_IMG_SN, HI.HOUSE_SN, HI.ATCH_FILE_SN, HI.SORT_SEQ, HI.RPRS_YN,
+               A.URL_ADDR, A.ORGNL_FILE_NM
+          FROM HOUSE_IMAGE HI
+          JOIN ATCH_FILE A ON A.ATCH_FILE_SN = HI.ATCH_FILE_SN
+         WHERE HI.HOUSE_SN = #{houseSn}
+           AND HI.DEL_YN = 'N'
+         ORDER BY HI.SORT_SEQ, HI.HOUSE_IMG_SN
+    </select>
+
+    <select id="selectHouseImageForUpdate" resultType="egovframework.eeum.house.vo.HouseImageVO">
+        SELECT HOUSE_IMG_SN, HOUSE_SN, ATCH_FILE_SN, SORT_SEQ, RPRS_YN, DEL_YN
+          FROM HOUSE_IMAGE
+         WHERE HOUSE_IMG_SN = #{houseImgSn}
+         FOR UPDATE
+    </select>
+
+    <select id="maxSortSeqByHouse" resultType="int">
+        SELECT COALESCE(MAX(SORT_SEQ), 0)
+          FROM HOUSE_IMAGE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <select id="countActiveImagesByHouse" resultType="int">
+        SELECT COUNT(*)
+          FROM HOUSE_IMAGE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <select id="countRepresentativeImagesByHouse" resultType="int">
+        SELECT COUNT(*)
+          FROM HOUSE_IMAGE
+         WHERE HOUSE_SN = #{houseSn}
+           AND RPRS_YN = 'Y'
+           AND DEL_YN = 'N'
+    </select>
+
+    <select id="selectFirstActiveImageSnByHouse" resultType="long">
+        SELECT HOUSE_IMG_SN
+          FROM HOUSE_IMAGE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+         ORDER BY SORT_SEQ, HOUSE_IMG_SN
+         LIMIT 1
+    </select>
+
+    <update id="softDeleteHouseImage">
+        UPDATE HOUSE_IMAGE
+           SET DEL_YN = 'Y',
+               RPRS_YN = 'N',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_IMG_SN = #{houseImgSn}
+           AND HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="clearRepresentativeByHouse">
+        UPDATE HOUSE_IMAGE
+           SET RPRS_YN = 'N',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+           AND RPRS_YN = 'Y'
+    </update>
+
+    <update id="setRepresentative">
+        UPDATE HOUSE_IMAGE
+           SET RPRS_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_IMG_SN = #{houseImgSn}
+           AND HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <select id="selectActiveAtchFileSnsByHouse" resultType="long">
+        SELECT ATCH_FILE_SN
+          FROM HOUSE_IMAGE
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <update id="softDeleteImagesByHouse">
+        UPDATE HOUSE_IMAGE
+           SET DEL_YN = 'Y',
+               RPRS_YN = 'N',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+</mapper>

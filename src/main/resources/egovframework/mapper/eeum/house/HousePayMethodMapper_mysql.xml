@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.house.dao.HousePayMethodMapper">
+
+    <!-- 고택의 활성 결제수단 코드 목록(SORT_SEQ 순) — 상세 표출/발행검증용 -->
+    <select id="selectActiveCodesByHouse" resultType="string">
+        SELECT PAY_MTHD_CD
+          FROM HOUSE_PAY_MTHD
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+         ORDER BY SORT_SEQ, HOUSE_PAY_MTHD_SN
+    </select>
+
+    <!-- 고택의 활성 결제수단 행 전부 soft delete(교체 전 비움) -->
+    <update id="softDeleteActiveByHouse">
+        UPDATE HOUSE_PAY_MTHD
+           SET DEL_YN = 'Y',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE HOUSE_SN = #{houseSn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <!-- 결제수단 1행 삽입 — MDFCN_DT=REG_DT(insert 규칙) -->
+    <insert id="insertPayMethod" parameterType="egovframework.eeum.house.vo.HousePayMethodVO"
+            useGeneratedKeys="true" keyProperty="housePayMthdSn">
+        INSERT INTO HOUSE_PAY_MTHD (
+            HOUSE_SN, PAY_MTHD_CD, SORT_SEQ, REG_DT, RGTR_SN, MDFCN_DT, MDFR_SN
+        ) VALUES (
+            #{houseSn}, #{payMthdCd}, #{sortSeq}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6), #{mdfrSn}
+        )
+    </insert>
+
+</mapper>

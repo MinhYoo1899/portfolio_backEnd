@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.house.dao.HouseDrawerMapper">
+
+    <!-- 헤더: HOUSE + 소유 파트너. 운영자 조회이므로 소유권 무관, DEL_YN='N'만. 담당자 연락처(PIC_MBL_TELNO) 미조회. -->
+    <select id="selectDrawerHouse" resultType="egovframework.eeum.house.vo.HouseDrawerVO">
+        SELECT H.HOUSE_SN, H.HOUSE_NM, P.CONM AS PRTNR_CONM, H.ADDR, H.HOUSE_STTS_CD, H.HOUSE_DC,
+               H.CHKIN_TIME, H.CHKOUT_TIME, H.NOTICE_CN, H.CNCL_RFND_PLCY_CN, H.PBTRNSP_GUIDE_CN,
+               (SELECT HI.ATCH_FILE_SN FROM HOUSE_IMAGE HI
+                 WHERE HI.HOUSE_SN = H.HOUSE_SN AND HI.DEL_YN = 'N' AND HI.RPRS_YN = 'Y' LIMIT 1) AS REP_IMG_FILE_SN,
+               P.RPRSV_NM, P.BRNO, P.MAIL_ORDER_SALES_NO,
+               TRIM(CONCAT_WS(' ', P.ADDR, P.DADDR)) AS BIZ_ADDR
+          FROM HOUSE H
+          JOIN PRTNR_MST P ON P.PRTNR_SN = H.PRTNR_SN
+         WHERE H.HOUSE_SN = #{houseSn} AND H.DEL_YN = 'N'
+    </select>
+
+    <!-- 미삭제 등록 객실 전체(상태 무관 — 운영자 검수/조회 표면, public 판매 표면 아님) + 대표요금
+         (창 내 sellable 최저가 상관 서브쿼리, SOLD 무관). ROOM_STTS_CD 는 응답에 내려 상태 구분(DRAFT/REVIEW_REQUESTED 포함). -->
+    <select id="selectDrawerRooms" resultType="egovframework.eeum.house.vo.DrawerRoomVO">
+        SELECT R.ROOM_SN, R.ROOM_NM, R.ROOM_STTS_CD, R.BSC_PRSN_CNT, R.MAX_PRSN_CNT,
+               R.ROOM_DC, R.AREA_SQM, R.ROOM_CNT, R.BATHRM_CNT,
+               (SELECT MIN(C.PRICE_AMT) FROM ROOM_CALENDAR C
+                 WHERE C.ROOM_SN = R.ROOM_SN
+                   AND C.STAY_DATE &gt;= #{from} AND C.STAY_DATE &lt; #{to}
+                   AND C.CLOSED_YN = 'N' AND C.PRICE_AMT &gt; 0) AS REP_PRICE_FROM
+          FROM ROOM R
+         WHERE R.HOUSE_SN = #{houseSn} AND R.DEL_YN = 'N'
+         ORDER BY R.ROOM_SN
+    </select>
+
+    <!-- 침구 배치 — COMM_CD BEDDING_TYPE 표시명. -->
+    <select id="selectDrawerBeddings" resultType="egovframework.eeum.house.vo.DrawerRoomBeddingVO">
+        SELECT B.ROOM_SN, B.BEDDING_TYPE_CD, CD.CD_NM AS BEDDING_TYPE_NM, B.BED_CNT
+          FROM ROOM_BEDDING B
+          LEFT JOIN COMM_CD CD ON CD.GROUP_CD = 'BEDDING_TYPE' AND CD.CD = B.BEDDING_TYPE_CD AND CD.DEL_YN = 'N'
+         WHERE B.DEL_YN = 'N'
+           AND B.ROOM_SN IN
+           <foreach item="rs" collection="roomSns" open="(" separator="," close=")">#{rs}</foreach>
+         ORDER BY B.ROOM_SN, B.BEDDING_TYPE_CD
+    </select>
+
+    <!-- 편의시설 배치 — 표출용: 매핑 활성 + 카탈로그 활성(USE_YN='Y') + 객실 scope('ROOM','BOTH')만.
+         기존 RoomAmenityMapper.selectActiveAmenitiesByRoom 정책과 정합(비활성/고택전용 scope 미노출 — round-trip 회귀 방지). -->
+    <select id="selectDrawerAmenities" resultType="egovframework.eeum.house.vo.DrawerRoomAmenityVO">
+        SELECT RA.ROOM_SN, A.AMENITY_SN, A.AMENITY_NM, A.AMENITY_CTGRY_CD, CD.CD_NM AS AMENITY_CTGRY_NM
+          FROM ROOM_AMENITY RA
+          JOIN AMENITY_MST A ON A.AMENITY_SN = RA.AMENITY_SN
+                            AND A.DEL_YN = 'N'
+                            AND A.USE_YN = 'Y'
+                            AND A.APPLY_SCOPE_CD IN ('ROOM','BOTH')
+          LEFT JOIN COMM_CD CD ON CD.GROUP_CD = 'AMENITY_CTGRY' AND CD.CD = A.AMENITY_CTGRY_CD
+                              AND CD.USE_YN = 'Y' AND CD.DEL_YN = 'N'
+         WHERE RA.DEL_YN = 'N'
+           AND RA.ROOM_SN IN
+           <foreach item="rs" collection="roomSns" open="(" separator="," close=")">#{rs}</foreach>
+         ORDER BY RA.ROOM_SN, A.AMENITY_CTGRY_CD, A.SORT_SEQ, A.AMENITY_SN
+    </select>
+
+    <!-- 이미지 배치 — 활성 전체(대표 우선 정렬). URL 은 응답에서 /files/download?atchFileSn= 로 조립. -->
+    <select id="selectDrawerImages" resultType="egovframework.eeum.house.vo.DrawerRoomImageVO">
+        SELECT RI.ROOM_SN, RI.ATCH_FILE_SN, RI.RPRS_YN, RI.SORT_SEQ
+          FROM ROOM_IMAGE RI
+         WHERE RI.DEL_YN = 'N'
+           AND RI.ROOM_SN IN
+           <foreach item="rs" collection="roomSns" open="(" separator="," close=")">#{rs}</foreach>
+         ORDER BY RI.ROOM_SN, RI.RPRS_YN DESC, RI.SORT_SEQ
+    </select>
+
+    <!-- 요일 요금 버킷(하우스 단위) — 미삭제 등록 객실 전체(상태 무관)의 sellable 밤(CLOSED='N' AND PRICE&gt;0) MIN/MAX. SOLD 무관. -->
+    <select id="selectDrawerPriceBuckets" resultType="egovframework.eeum.house.vo.DrawerPriceBucketVO">
+        SELECT CASE WHEN DAYOFWEEK(C.STAY_DATE) = 6 THEN 'FRI'
+                    WHEN DAYOFWEEK(C.STAY_DATE) = 7 THEN 'SAT' ELSE 'WEEKDAY' END AS BUCKET,
+               MIN(C.PRICE_AMT) AS MIN_PRICE, MAX(C.PRICE_AMT) AS MAX_PRICE
+          FROM ROOM_CALENDAR C
+          JOIN ROOM R ON R.ROOM_SN = C.ROOM_SN
+         WHERE R.HOUSE_SN = #{houseSn} AND R.DEL_YN = 'N'
+           AND C.STAY_DATE &gt;= #{from} AND C.STAY_DATE &lt; #{to}
+           AND C.CLOSED_YN = 'N' AND C.PRICE_AMT &gt; 0
+         GROUP BY BUCKET
+    </select>
+
+    <!-- 하우스 휴관일 — 창 내 '캘린더 행 보유 미삭제 객실'(=calendarRoomCount) 전부가 그 날짜에 CLOSED_YN='Y' 인 날만
+         (행 누락일=설정 없음, 제외). 분모는 서비스가 countDrawerCalendarRooms 로 계산 — 캘린더 없는 DRAFT 객실이
+         기존 ACTIVE 객실 휴관일 표시를 삼키지 않도록(상태 무관, 캘린더 참여 객실만 분모). -->
+    <select id="selectDrawerHouseClosedDates" resultType="java.time.LocalDate">
+        SELECT C.STAY_DATE
+          FROM ROOM_CALENDAR C
+          JOIN ROOM R ON R.ROOM_SN = C.ROOM_SN
+         WHERE R.HOUSE_SN = #{houseSn} AND R.DEL_YN = 'N'
+           AND C.STAY_DATE &gt;= #{from} AND C.STAY_DATE &lt; #{to}
+           AND C.CLOSED_YN = 'Y'
+         GROUP BY C.STAY_DATE
+        HAVING COUNT(DISTINCT C.ROOM_SN) = #{calendarRoomCount}
+         ORDER BY C.STAY_DATE
+    </select>
+
+    <!-- 휴관일 분모 — 창 내 캘린더 행이 존재하는 미삭제 객실 수(상태 무관, CLOSED 여부 무관). -->
+    <select id="countDrawerCalendarRooms" resultType="int">
+        SELECT COUNT(DISTINCT C.ROOM_SN)
+          FROM ROOM_CALENDAR C
+          JOIN ROOM R ON R.ROOM_SN = C.ROOM_SN
+         WHERE R.HOUSE_SN = #{houseSn} AND R.DEL_YN = 'N'
+           AND C.STAY_DATE &gt;= #{from} AND C.STAY_DATE &lt; #{to}
+    </select>
+
+</mapper>

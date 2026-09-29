@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.house.service.amenity.dao.AmenityMapper">
+
+    <insert id="insertAmenity" parameterType="egovframework.eeum.house.vo.AmenityVO"
+            useGeneratedKeys="true" keyProperty="amenitySn">
+        INSERT INTO AMENITY_MST (
+            AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, ICON_KEY, SORT_SEQ, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{amenityCtgryCd}, #{applyScopeCd}, #{amenityNm}, #{iconKey}, #{sortSeq}, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{rgtrSn}
+        )
+        <!-- USE_YN='Y', DEL_YN='N', CUSTOM_YN='N' 은 DB 기본값 -->
+    </insert>
+
+    <select id="selectAmenityForUpdate" resultType="egovframework.eeum.house.vo.AmenityVO">
+        SELECT AMENITY_SN, AMENITY_CTGRY_CD, AMENITY_NM, USE_YN, DEL_YN
+          FROM AMENITY_MST
+         WHERE AMENITY_SN = #{amenitySn}
+         FOR UPDATE
+    </select>
+
+    <select id="selectAmenities" resultType="egovframework.eeum.house.vo.AmenityVO">
+        SELECT AMENITY_SN, AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, AMENITY_KEY,
+               ICON_KEY, SORT_SEQ, USE_YN, CUSTOM_YN
+          FROM AMENITY_MST
+         WHERE DEL_YN = 'N'
+        <if test="onlyActive"> AND USE_YN = 'Y' </if>
+         ORDER BY AMENITY_CTGRY_CD, SORT_SEQ, AMENITY_SN
+    </select>
+
+    <!-- 커스텀(직접입력) insert-or-get(원자적) — CUSTOM_YN='Y', 즉시 활성(승인 게이트 없음).
+         동일 활성명 충돌 시 기존행 amenitySn 반환(경합 안전). USE_YN='Y', DEL_YN='N' 은 DB 기본값. SORT_SEQ 후순위. -->
+    <insert id="insertCustomAmenity" parameterType="egovframework.eeum.house.vo.AmenityVO"
+            useGeneratedKeys="true" keyProperty="amenitySn">
+        INSERT INTO AMENITY_MST (
+            AMENITY_CTGRY_CD, APPLY_SCOPE_CD, AMENITY_NM, CUSTOM_YN,
+            REQUEST_USER_SN, SORT_SEQ, REG_DT, MDFCN_DT, RGTR_SN
+        ) VALUES (
+            #{amenityCtgryCd}, #{applyScopeCd}, #{amenityNm}, 'Y',
+            #{requestUserSn}, 999, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), #{requestUserSn}
+        )
+        ON DUPLICATE KEY UPDATE AMENITY_SN = LAST_INSERT_ID(AMENITY_SN)
+    </insert>
+
+    <!-- 매핑 검증 — 활성(USE_YN='Y', 미삭제)·적용범위 일치 개수(객실=ROOM,BOTH / 고택=HOUSE,BOTH). 승인 게이트 없음 -->
+    <select id="countActiveScopedByIds" resultType="int">
+        SELECT COUNT(*)
+          FROM AMENITY_MST
+         WHERE DEL_YN = 'N'
+           AND USE_YN = 'Y'
+           AND APPLY_SCOPE_CD IN
+            <foreach collection="scopes" item="sc" open="(" separator="," close=")">#{sc}</foreach>
+           AND AMENITY_SN IN
+            <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <update id="updateAmenity">
+        UPDATE AMENITY_MST
+           SET AMENITY_CTGRY_CD = #{amenityCtgryCd},
+               APPLY_SCOPE_CD = #{applyScopeCd},
+               AMENITY_NM = #{amenityNm},
+               ICON_KEY = #{iconKey},
+               SORT_SEQ = #{sortSeq},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE AMENITY_SN = #{amenitySn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <update id="updateAmenityActive">
+        UPDATE AMENITY_MST
+           SET USE_YN = #{useYn},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN = #{mdfrSn}
+         WHERE AMENITY_SN = #{amenitySn}
+           AND DEL_YN = 'N'
+    </update>
+
+    <select id="countActiveCategory" resultType="int">
+        SELECT COUNT(*)
+          FROM COMM_CD
+         WHERE GROUP_CD = 'AMENITY_CTGRY'
+           AND CD = #{ctgryCd}
+           AND USE_YN = 'Y'
+           AND DEL_YN = 'N'
+    </select>
+
+</mapper>

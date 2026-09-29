@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.reservation.service.reservation.dao.ReservationMapper">
+
+    <!-- 헤더 조회 공용 컬럼 — 응답에 필요한 최소치(게스트 PII 불포함) -->
+    <sql id="reservationHeaderColumns">
+        RESERVATION_SN, ORDER_NO, RESERVATION_STTS_CD, CHECK_IN_DATE, CHECK_OUT_DATE,
+        NGT_CNT, GUEST_CNT, TOTAL_AMT, CRNC_CD, HOLD_EXPRY_DT
+    </sql>
+
+    <!-- 소유권/판매성 해석 — roomSn 으로 판매자(H.PRTNR_SN)·고택·객실 상태를 서버가 해석(본문 미신뢰). ROOM→HOUSE 조인 -->
+    <select id="selectRoomOwnership" resultType="egovframework.eeum.reservation.vo.ReservationRoomOwnershipVO">
+        SELECT R.ROOM_SN, R.HOUSE_SN, H.PRTNR_SN, R.ROOM_NM, R.ROOM_STTS_CD, H.HOUSE_STTS_CD
+          FROM ROOM R
+          JOIN HOUSE H ON H.HOUSE_SN = R.HOUSE_SN
+                      AND H.DEL_YN = 'N'
+         WHERE R.ROOM_SN = #{roomSn}
+           AND R.DEL_YN = 'N'
+    </select>
+
+    <!-- [체크인, 체크아웃) 반개구간의 숙박일별 재고/단가/마감 — 누락 밤은 결과에서 빠짐(서비스가 건수로 판정) -->
+    <select id="selectCalendarNights" resultType="egovframework.eeum.reservation.vo.ReservationCalendarNightVO">
+        SELECT STAY_DATE, TOTAL_QTY, SOLD_QTY, PRICE_AMT, CLOSED_YN
+          FROM ROOM_CALENDAR
+         WHERE ROOM_SN = #{roomSn}
+           AND STAY_DATE &gt;= #{checkIn}
+           AND STAY_DATE &lt; #{checkOut}
+         ORDER BY STAY_DATE
+    </select>
+
+    <!-- 멱등 사전점검 — (예약자, IDEMPOTENCY_KEY) 스코프. 원시 헤더가 아닌 sha256hex 만 저장/조회 -->
+    <select id="selectExistingByIdemHash" resultType="long">
+        SELECT RESERVATION_SN
+          FROM RESERVATION
+         WHERE RESERVER_USER_SN = #{userSn}
+           AND IDEMPOTENCY_KEY = #{idemHash}
+         LIMIT 1
+    </select>
+
+    <!-- 약관 버전번호 해석(동의 스냅샷용) — 서버가 TRMS_MST 에서 조회(클라이언트 값 미신뢰) -->
+    <select id="selectTermsVersion" resultType="string">
+        SELECT VER_NO
+          FROM TRMS_MST
+         WHERE TRMS_SN = #{trmsSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 예약 헤더 insert — RESERVATION_STTS_CD/CRNC_CD 는 명시(응답 정합), MDFCN_DT=REG_DT(등록시각). HOLD_ID 는 fail-open 시 null -->
+    <insert id="insertReservation" parameterType="egovframework.eeum.reservation.vo.ReservationVO"
+            useGeneratedKeys="true" keyProperty="reservationSn">
+        INSERT INTO RESERVATION (
+            ORDER_NO, IDEMPOTENCY_KEY, RESERVATION_STTS_CD, PRTNR_SN, HOUSE_SN, ROOM_SN, RESERVER_USER_SN,
+            CHECK_IN_DATE, CHECK_OUT_DATE, NGT_CNT, GUEST_CNT, TOTAL_AMT, CRNC_CD, HOLD_EXPRY_DT, HOLD_ID,
+            REG_DT, RGTR_SN, MDFCN_DT
+        ) VALUES (
+            #{orderNo}, #{idempotencyKey}, #{reservationSttsCd}, #{prtnrSn}, #{houseSn}, #{roomSn}, #{reserverUserSn},
+            #{checkInDate}, #{checkOutDate}, #{ngtCnt}, #{guestCnt}, #{totalAmt}, #{crncCd}, #{holdExpryDt}, #{holdId},
+            UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 예약 항목 insert — 객실명/소계 스냅샷, 수량 1 고정 -->
+    <insert id="insertItem" parameterType="egovframework.eeum.reservation.vo.ReservationItemVO"
+            useGeneratedKeys="true" keyProperty="reservationItemSn">
+        INSERT INTO RESERVATION_ITEM (
+            RESERVATION_SN, ROOM_SN, ROOM_NM_SNAP, ITEM_AMT, ROOM_QTY, REG_DT, RGTR_SN, MDFCN_DT
+        ) VALUES (
+            #{reservationSn}, #{roomSn}, #{roomNmSnap}, #{itemAmt}, #{roomQty}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 예약 일자별 단가 스냅샷 insert -->
+    <insert id="insertItemNight" parameterType="egovframework.eeum.reservation.vo.ReservationItemNightVO">
+        INSERT INTO RESERVATION_ITEM_NIGHT (
+            RESERVATION_ITEM_SN, STAY_DATE, NIGHT_PRICE_AMT, NIGHT_QTY, REG_DT, RGTR_SN, MDFCN_DT
+        ) VALUES (
+            #{reservationItemSn}, #{stayDate}, #{nightPriceAmt}, #{nightQty}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 예약 게스트 insert — GUEST_MBL_TELNO 는 암호화 TypeHandler 로 바인딩(평문 저장 경로 차단). GUEST_NM 은 평문 -->
+    <insert id="insertGuest" parameterType="egovframework.eeum.reservation.vo.ReservationGuestVO">
+        INSERT INTO RESERVATION_GUEST (
+            RESERVATION_SN, GUEST_TYPE_CD, GUEST_NM, GUEST_MBL_TELNO, PII_PURGE_DUE_DT, REG_DT, RGTR_SN, MDFCN_DT
+        ) VALUES (
+            #{reservationSn}, #{guestTypeCd}, #{guestNm},
+            #{guestMblTelno, typeHandler=egovframework.eeum.base.crypto.GuestMblTelnoEncryptedTypeHandler},
+            #{piiPurgeDueDt}, UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 예약 동의 스냅샷 insert — TRMS_VER_NO 는 서버 해석값 -->
+    <insert id="insertAgre" parameterType="egovframework.eeum.reservation.vo.ReservationAgreeVO">
+        INSERT INTO RESERVATION_AGRE (
+            RESERVATION_SN, TRMS_SN, TRMS_VER_NO, AGRE_PRPS_CD, AGRE_ITEM_CN, AGRE_DT, REG_DT, RGTR_SN, MDFCN_DT
+        ) VALUES (
+            #{reservationSn}, #{trmsSn}, #{trmsVerNo}, #{agrePrpsCd}, #{agreItemCn}, #{agreDt},
+            UTC_TIMESTAMP(6), #{rgtrSn}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+    <!-- 본인 예약 상세 — 소유권 WHERE(RESERVER_USER_SN) 2중 가드. 타 소유/없음 → null -->
+    <select id="selectReservationOwned" resultType="egovframework.eeum.reservation.vo.ReservationVO">
+        SELECT <include refid="reservationHeaderColumns"/>
+          FROM RESERVATION
+         WHERE RESERVATION_SN = #{reservationSn}
+           AND RESERVER_USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+    </select>
+
+    <!-- 본인 예약 목록 — 최신순 -->
+    <select id="selectMyReservations" resultType="egovframework.eeum.reservation.vo.ReservationVO">
+        SELECT <include refid="reservationHeaderColumns"/>
+          FROM RESERVATION
+         WHERE RESERVER_USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+         ORDER BY RESERVATION_SN DESC
+    </select>
+
+    <!-- 본인 예약 행 잠금(확정용) — 소유권 WHERE(RESERVER_USER_SN) + FOR UPDATE. 상태/객실/홀드/주문/금액 포함. 타 소유/없음 → null -->
+    <select id="selectReservationForUpdate" resultType="egovframework.eeum.reservation.vo.ReservationVO">
+        SELECT RESERVATION_SN, ORDER_NO, RESERVATION_STTS_CD, ROOM_SN,
+               CHECK_IN_DATE, CHECK_OUT_DATE, NGT_CNT, GUEST_CNT, TOTAL_AMT, CRNC_CD, HOLD_EXPRY_DT, HOLD_ID
+          FROM RESERVATION
+         WHERE RESERVATION_SN = #{reservationSn}
+           AND RESERVER_USER_SN = #{userSn}
+           AND DEL_YN = 'N'
+         FOR UPDATE
+    </select>
+
+    <!-- 한 밤 재고 최종확정(오버부킹 최후 가드) — 마감 아님 AND 잔여(TOTAL-SOLD)≥qty 조건부. 갱신 행 수 반환(0=매진/마감/누락) -->
+    <update id="confirmNight">
+        UPDATE ROOM_CALENDAR
+           SET SOLD_QTY = SOLD_QTY + #{qty},
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE ROOM_SN = #{roomSn}
+           AND STAY_DATE = #{stayDate}
+           AND CLOSED_YN = 'N'
+           AND (TOTAL_QTY - SOLD_QTY) &gt;= #{qty}
+    </update>
+
+    <!-- 상태 확정(RESERVED) — HOLD/PAYMENT_PENDING 에서만 전이(행 잠금 내 동시성 안전 조건). 갱신 행 수 반환 -->
+    <update id="updateStatusToReserved">
+        UPDATE RESERVATION
+           SET RESERVATION_STTS_CD = 'RESERVED',
+               MDFCN_DT = UTC_TIMESTAMP(6),
+               MDFR_SN  = #{mdfrSn}
+         WHERE RESERVATION_SN = #{reservationSn}
+           AND RESERVATION_STTS_CD IN ('HOLD','PAYMENT_PENDING')
+    </update>
+
+</mapper>

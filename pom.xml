@@ -1,0 +1,478 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>egovframework.eeum</groupId>
+	<artifactId>eeum-backend</artifactId>
+	<packaging>jar</packaging>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>eeum-backend</name>
+	<description>이음 고택숙박 예약 백엔드 (전자정부 표준프레임워크 부트 5.0.0 기반)</description>
+	<url>http://www.egovframe.go.kr</url>
+
+	<licenses>
+		<license>
+			<name>The Apache Software License, Version 2.0</name>
+			<url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+		</license>
+	</licenses>
+
+	<!-- eGovFramework Boot Parent (Spring Boot 버전을 이 부모가 결정) -->
+	<parent>
+		<groupId>org.egovframe.boot</groupId>
+		<artifactId>egovframe-boot-starter-parent</artifactId>
+		<version>5.0.0</version>
+	</parent>
+
+	<properties>
+		<java.version>17</java.version>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+		<!-- eGov 샘플은 2.6.0이나 Spring 6.2(eGov부트5.0=SpringBoot3.5)와 호환 위해 2.8.x 필요 -->
+		<springdoc.openapi.ui.version>2.8.6</springdoc.openapi.ui.version>
+		<commons-validator.version>1.9.0</commons-validator.version>
+		<protobuf.java.version>3.25.5</protobuf.java.version>
+		<log4j2.version>2.25.3</log4j2.version>
+		<slf4j.version>2.0.17</slf4j.version>
+		<log4jdbc.version>1.2</log4jdbc.version>
+		<jjwt.version>0.12.6</jjwt.version>
+		<icu4j.version>77.1</icu4j.version>
+		<tomcat-embed.version>10.1.52</tomcat-embed.version>
+		<commons-beanutils.version>1.11.0</commons-beanutils.version>
+		<commons-lang3.version>3.18.0</commons-lang3.version>
+		<jsch.version>0.2.23</jsch.version>
+	</properties>
+
+	<repositories>
+		<repository>
+			<id>mvn2s</id>
+			<url>https://repo1.maven.org/maven2/</url>
+			<releases>
+				<enabled>true</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+		<repository>
+			<id>egovframe2</id>
+			<url>https://maven.egovframe.go.kr/maven/</url>
+			<releases>
+				<enabled>true</enabled>
+			</releases>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+		</repository>
+	</repositories>
+
+	<dependencies>
+		<!-- spring boot -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+			<!-- 테스트 클래스패스에도 Logback 재유입 차단 — starter-test → starter → starter-logging 경로 (codex 교차검토 필수수정).
+			     누락 시 검증(*Verification)이 운영과 다른 로깅 엔진(Logback) 위에서 돌게 됨 -->
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<!-- 이음 추가: 보안 테스트(MockMvc 권한 매트릭스 — 채널×권한 401/403/노출 자동화, B2) -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- 이음 추가: 패키지 의존 규칙 테스트 (base→도메인 의존 금지 등 — D15) -->
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>1.3.0</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-devtools</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- ===== 이음 추가: Actuator (배포 헬스체크 — /actuator/health 만 노출) ===== -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<!-- ===== 이음 추가: Redis (refresh 토큰/예약 hold/캐시) ===== -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+			<!-- 로깅 백엔드 = Log4j2 단일화 — 모든 spring-boot-starter-* 추가 시 동일 제외 필수 (codex 교차검토 필수수정).
+			     web 스타터 exclusion 에만 의존하면 Maven nearest-wins 순서에 따라 Logback 이 재유입될 수 있음 -->
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<!-- ===== 이음 추가: Flyway (DB 마이그레이션) ===== -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-mysql</artifactId>
+		</dependency>
+
+		<!-- swagger -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.openapi.ui.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>org.apache.commons</groupId>
+					<artifactId>commons-lang3</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- 전자정부 표준프레임워크 RTE -->
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-ptl-mvc</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.apache.commons</groupId>
+					<artifactId>commons-lang3</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-psl-dataaccess</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-fdl-idgnr</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-fdl-property</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>org.apache.commons</groupId>
+					<artifactId>commons-lang3</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-fdl-string</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-fdl-crypto</artifactId>
+			<version>${egovframe.rte.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.egovframe.rte</groupId>
+			<artifactId>egovframe-rte-fdl-security</artifactId>
+			<version>${egovframe.rte.version}</version>
+		</dependency>
+
+		<!-- DB 커넥션풀 / 유틸 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-dbcp2</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>commons-codec</groupId>
+			<artifactId>commons-codec</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>commons-validator</groupId>
+			<artifactId>commons-validator</artifactId>
+			<version>${commons-validator.version}</version>
+		</dependency>
+		<!-- commons-lang3 는 하단의 CVE-2025-48924 보완용 선언 한 곳에서만 관리 (중복 선언 제거 — 외부 검토 반영) -->
+
+		<!-- 로컬/테스트용 임베디드 DB -->
+		<dependency>
+			<groupId>org.hsqldb</groupId>
+			<artifactId>hsqldb</artifactId>
+		</dependency>
+		<!-- 이음 추가: 예약 확정 매퍼 통합검증(@MybatisTest)용 H2 — MySQL 호환모드(MODE=MySQL)로 실 매퍼 SQL 을 인메모리로 실행.
+		     실 트랜잭션 롤백/소유권 WHERE 를 mock 없이 검증(Testcontainers 미사용 — 팀 정책). test 스코프. -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- 이음 추가: @MybatisTest 슬라이스 — mybatis-spring-boot(egov 수동 wiring 과 별개, 테스트 전용).
+		     starter-test 는 test-autoconfigure 만 가져오므로, 슬라이스가 SqlSessionFactory 를 오토구성하도록
+		     본체 autoconfigure 도 명시 추가. 로깅은 Log4j2 단일화 유지(starter-logging 재유입 차단). -->
+		<dependency>
+			<groupId>org.mybatis.spring.boot</groupId>
+			<artifactId>mybatis-spring-boot-autoconfigure</artifactId>
+			<version>3.0.4</version>
+			<scope>test</scope>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.mybatis.spring.boot</groupId>
+			<artifactId>mybatis-spring-boot-starter-test</artifactId>
+			<version>3.0.4</version>
+			<scope>test</scope>
+			<exclusions>
+				<exclusion>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-starter-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- MySQL 드라이버 -->
+		<dependency>
+			<groupId>com.mysql</groupId>
+			<artifactId>mysql-connector-j</artifactId>
+		</dependency>
+		<!-- CVE-2024-7254 보완용 직접 주입 -->
+		<dependency>
+			<groupId>com.google.protobuf</groupId>
+			<artifactId>protobuf-java</artifactId>
+			<version>${protobuf.java.version}</version>
+		</dependency>
+
+		<!-- validator -->
+		<dependency>
+			<groupId>org.hibernate.validator</groupId>
+			<artifactId>hibernate-validator</artifactId>
+		</dependency>
+
+		<!-- Logging (log4j2 + log4jdbc) -->
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-core</artifactId>
+			<version>${log4j2.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-slf4j2-impl</artifactId>
+			<version>${log4j2.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>jcl-over-slf4j</artifactId>
+			<version>${slf4j.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>log4j-over-slf4j</artifactId>
+			<version>${slf4j.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>com.googlecode.log4jdbc</groupId>
+			<artifactId>log4jdbc</artifactId>
+			<version>${log4jdbc.version}</version>
+			<exclusions>
+				<exclusion>
+					<artifactId>slf4j-api</artifactId>
+					<groupId>org.slf4j</groupId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- JWT -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt</artifactId>
+			<version>${jjwt.version}</version>
+		</dependency>
+
+		<!-- 소셜 로그인 id_token(JWKS/RS256) 검증 — NimbusJwtDecoder (버전은 Boot BOM 관리). starter 가 아니라 로깅 exclusion 불요 -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
+
+		<!-- 이음 추가: SFTP 파일 저장(mwiede/jsch 포크 — 최신 OpenSSH 알고리즘 대응). starter 가 아니라 로깅 exclusion 불요.
+		     ⚠ com.jcraft:jsch(원본) 중복 유입 여부는 dependency:tree 로 확인 (codex 교차검토) -->
+		<dependency>
+			<groupId>com.github.mwiede</groupId>
+			<artifactId>jsch</artifactId>
+			<version>${jsch.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.ibm.icu</groupId>
+			<artifactId>icu4j</artifactId>
+			<version>${icu4j.version}</version>
+		</dependency>
+
+		<!-- 임베디드 톰캣 CVE 보완용 직접 주입 -->
+		<dependency>
+			<groupId>org.apache.tomcat</groupId>
+			<artifactId>tomcat-annotations-api</artifactId>
+			<version>${tomcat-embed.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-core</artifactId>
+			<version>${tomcat-embed.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-el</artifactId>
+			<version>${tomcat-embed.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-websocket</artifactId>
+			<version>${tomcat-embed.version}</version>
+		</dependency>
+
+		<!-- CVE-2025-48734 보완용 직접 주입 -->
+		<dependency>
+			<groupId>commons-beanutils</groupId>
+			<artifactId>commons-beanutils</artifactId>
+			<version>${commons-beanutils.version}</version>
+		</dependency>
+		<!-- CVE-2025-48924 보완용 직접 주입 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>${commons-lang3.version}</version>
+		</dependency>
+
+		<!-- 엑셀 내보내기(운영자 상품목록) -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>5.3.0</version>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<defaultGoal>install</defaultGoal>
+		<directory>${basedir}/target</directory>
+		<finalName>${project.artifactId}-${project.version}</finalName>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<release>${java.version}</release>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
+					<encoding>UTF-8</encoding>
+						<parameters>true</parameters><!-- @Audit SpEL(#param) 파라미터명 해석 보장 — codex 코드검토 -->
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<executable>true</executable>
+				</configuration>
+			</plugin>
+			<!-- 이음: 검증 클래스 명명 = *Verification (test 단어 금지 — 팀 명명 규칙) -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<includes>
+						<include>**/*Verification.java</include>
+					</includes>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!-- DB 마이그레이션 수동 적용 전용 (팀 룰 2026-06-12: 앱 구동과 DB 변경 분리 — 부팅은 validate만, FlywayValidateOnlyConfig 참고).
+		     사용(개발 DB): 환경변수(DB_HOST/PORT/NAME/USERNAME/PASSWORD) 설정 후
+		       ./mvnw -Pmigrate-dev flyway:info      적용 예정분 확인
+		       ./mvnw -Pmigrate-dev flyway:migrate   실제 적용
+		     (Windows 는 scripts/db-migrate-dev.ps1 이 .env.develop 로드까지 대신해 줌)
+		     ⚠ 이 프로파일은 개발 시드(db/migration-dev)와 dev placeholder 를 포함 — 운영 DB에 사용 금지(운영용 프로파일은 운영 DB 확정 시 별도 추가) -->
+		<profile>
+			<id>migrate-dev</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.flywaydb</groupId>
+						<artifactId>flyway-maven-plugin</artifactId>
+						<version>${flyway.version}</version>
+						<configuration>
+							<!-- serverTimezone=UTC — 타임존 표준(docs/timezone-standard.md): 마이그레이션 시드 NOW(6)도 UTC로 저장해 런타임(UTC_TIMESTAMP)과 통일 -->
+							<url>jdbc:mysql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?serverTimezone=UTC</url>
+							<user>${env.DB_USERNAME}</user>
+							<password>${env.DB_PASSWORD}</password>
+							<locations>
+								<location>filesystem:src/main/resources/db/migration</location>
+								<location>filesystem:src/main/resources/db/migration-dev</location>
+							</locations>
+							<baselineOnMigrate>true</baselineOnMigrate>
+							<cleanDisabled>true</cleanDisabled>
+							<placeholders>
+								<!-- 개발 마스터 기본 해시(EeumMaster1!) — application-dev.properties 기본값과 "항상 동일 값" 유지 필수.
+								     두 값이 달라지면 R__ 시드의 재적용 판단(체크섬)이 Maven/앱에서 갈려 validate 가 꼬임 (codex 교차검토) -->
+								<devMasterEnpswd>$2a$10$VKUYGuLMJeIoayyuM6ClQuNmxcWxcFlJGNN38t09HARHVMDG9SAey</devMasterEnpswd>
+							</placeholders>
+						</configuration>
+						<dependencies>
+							<dependency>
+								<groupId>org.flywaydb</groupId>
+								<artifactId>flyway-mysql</artifactId>
+								<version>${flyway.version}</version>
+							</dependency>
+							<dependency>
+								<groupId>com.mysql</groupId>
+								<artifactId>mysql-connector-j</artifactId>
+								<version>${mysql.version}</version>
+							</dependency>
+						</dependencies>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>

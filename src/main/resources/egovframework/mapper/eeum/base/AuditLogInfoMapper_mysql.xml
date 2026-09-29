@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="egovframework.eeum.base.audit.dao.AuditLogInfoMapper">
+
+    <insert id="insertAuditLogInfo" parameterType="egovframework.eeum.base.audit.AuditLogInfoVO">
+        INSERT INTO AUDIT_LOG_INFO (
+            ACTR_USER_SN, ACTR_TYPE, ACTN_CN, TRGT_TYPE, TRGT_ID,
+            PRCS_RSLT, CNTN_IP, USER_AGNT, CORR_ID, REG_DT
+        ) VALUES (
+            #{actrUserSn}, #{actrType}, #{actnCn}, #{trgtType}, #{trgtId},
+            #{prcsRslt}, #{cntnIp}, #{userAgnt}, #{corrId}, UTC_TIMESTAMP(6)
+        )
+    </insert>
+
+</mapper>
